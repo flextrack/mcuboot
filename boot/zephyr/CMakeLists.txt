@@ -71,6 +71,10 @@ zephyr_library_sources(
   flash_map_extended.c
   os.c
   keys.c
+  myHooks.c
+  myFat.c
+  myUsbMsc.c
+  myAps823.c
   )
 
 if(DEFINED CONFIG_ENABLE_MGMT_PERUSER)
