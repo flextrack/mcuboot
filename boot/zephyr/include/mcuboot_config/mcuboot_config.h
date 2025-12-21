@@ -469,10 +469,9 @@
 #else /* CONFIG_BOOT_WATCHDOG_FEED */
 
 /* Not enabled, no feed activity */
-#define MCUBOOT_WATCHDOG_FEED()    \
-    do                             \
-    {                              \
-        myAps823_toggleWatchdog(); \
+#define MCUBOOT_WATCHDOG_FEED() \
+    do                          \
+    {                           \
     } while (0)
 
 #endif /* CONFIG_BOOT_WATCHDOG_FEED */
