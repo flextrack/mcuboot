@@ -595,6 +595,7 @@ int main(void)
         FIH_PANIC;
     }
 
+    MCUBOOT_WATCHDOG_FEED();
 #ifdef MCUBOOT_RAM_LOAD
     BOOT_LOG_INF("Bootloader chainload address offset: 0x%x",
                  rsp.br_hdr->ih_load_addr);
@@ -615,6 +616,7 @@ int main(void)
 
     mcuboot_status_change(MCUBOOT_STATUS_BOOTABLE_IMAGE_FOUND);
 
+    MCUBOOT_WATCHDOG_FEED();
     ZEPHYR_BOOT_LOG_STOP();
     do_boot(&rsp);
 
