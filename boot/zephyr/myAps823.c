@@ -68,7 +68,7 @@ int myAps823_disableWatchdogPulse(void)
         return -1;
     }
 
-    LOG_INF("Disable ex-watchdog for ~6 seconds!");
+    LOG_INF("Disable ex-watchdog for few seconds!");
 
     return 0;
 }
@@ -76,8 +76,6 @@ int myAps823_disableWatchdogPulse(void)
 int myAps823_init(void)
 {
     int ret;
-
-    LOG_ERR("Initializing Aps823");
 
     ret = apx823_apply_pinctrl();
     if (ret != 0)
@@ -101,6 +99,8 @@ int myAps823_init(void)
     }
 
     aps823_initialized = true;
+
+    LOG_INF("Ex-watchdog initialized");
 
     return 0;
 }

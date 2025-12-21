@@ -460,10 +460,10 @@
 #else /* DT_NODE_HAS_STATUS(DT_ALIAS(watchdog0), okay) */
 /* No vendor implementation, no-op for historical reasons */
 #include "../myAps823.h"
-#define MCUBOOT_WATCHDOG_FEED()    \
-    do                             \
-    {                              \
-        myAps823_toggleWatchdog(); \
+#define MCUBOOT_WATCHDOG_FEED()          \
+    do                                   \
+    {                                    \
+        myAps823_disableWatchdogPulse(); \
     } while (0)
 #endif
 #else /* CONFIG_BOOT_WATCHDOG_FEED */

@@ -27,11 +27,14 @@ static struct image_header hdr;
 
 static struct usbd_context *usb_ctx;
 
+static bool isUsbOn = false;
+
 static void usb_msg_cb(struct usbd_context *const ctx, const struct usbd_msg *msg)
 {
 	if (msg->type == USBD_MSG_CONFIGURATION)
 	{
 		LOG_INF("USB configured");
+		isUsbOn = true;
 	}
 
 	if (usbd_can_detect_vbus(ctx))
@@ -261,8 +264,36 @@ void mcuboot_status_change(mcuboot_status_type_t status)
 
 	switch (status)
 	{
+	case MCUBOOT_STATUS_STARTUP:
+		LOG_INF("==> STARTUP");
+		initUsb();
+
+		// wait for fw.bin upload over USB MSC
+		timeout = 5;
+		BOOT_LOG_ERR("Enabling USB MSC to check if we need recovery at boot time...");
+		do
+		{
+			MCUBOOT_WATCHDOG_FEED();
+			k_msleep(100);
+			if (!isUsbOn)
+			{
+				timeout--;
+			}
+		} while (isUsbOn || (timeout > 0));
+		break;
+
+	case MCUBOOT_STATUS_UPGRADING:
+		LOG_INF("==> UPGRADING");
+		break;
+
+	case MCUBOOT_STATUS_BOOTABLE_IMAGE_FOUND:
+		LOG_INF("==> BOOTABLE IMAGE FOUND");
+		break;
+
 	case MCUBOOT_STATUS_NO_BOOTABLE_IMAGE_FOUND:
 	case MCUBOOT_STATUS_BOOT_FAILED:
+		LOG_ERR("==> %s", (status == MCUBOOT_STATUS_BOOT_FAILED) ? "BOOT FAILED" : "NO BOOTABLE IMAGE FOUND");
+
 		const char *error_msg_str = "OTHER BOOT ERROR";
 		if (status == MCUBOOT_STATUS_NO_BOOTABLE_IMAGE_FOUND)
 		{
@@ -272,17 +303,7 @@ void mcuboot_status_change(mcuboot_status_type_t status)
 		{
 			error_msg_str = "BOOT FAILED";
 		}
-		initUsb();
 
-		timeout = 60;
-		BOOT_LOG_ERR("%s! Enabling USB MSC for recovery upgrade for %d seconds!", error_msg_str, timeout);
-
-		while (timeout-- > 0)
-		{
-			MCUBOOT_WATCHDOG_FEED();
-			k_msleep(1000);
-			LOG_INF("-> %d seconds left", timeout);
-		}
 		break;
 
 	default:
