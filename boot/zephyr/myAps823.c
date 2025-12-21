@@ -100,7 +100,7 @@ int myAps823_init(void)
 
     aps823_initialized = true;
 
-    LOG_INF("Ex-watchdog initialized");
+    // LOG_INF("Ex-watchdog initialized");
 
     return 0;
 }

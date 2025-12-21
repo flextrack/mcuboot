@@ -253,24 +253,23 @@ static bool initUsb(void)
 		return false;
 	}
 
-	LOG_INF("USB initialized successfully");
+	// LOG_INF("USB initialized successfully");
 
 	return true;
 }
 
 void mcuboot_status_change(mcuboot_status_type_t status)
 {
+	static bool once = true;
 	int timeout;
 
 	switch (status)
 	{
 	case MCUBOOT_STATUS_STARTUP:
-		LOG_INF("==> STARTUP");
 		initUsb();
 
 		// wait for fw.bin upload over USB MSC
 		timeout = 5;
-		BOOT_LOG_ERR("Enabling USB MSC to check if we need recovery at boot time...");
 		do
 		{
 			MCUBOOT_WATCHDOG_FEED();
@@ -279,20 +278,27 @@ void mcuboot_status_change(mcuboot_status_type_t status)
 			{
 				timeout--;
 			}
+			else if (once)
+			{
+				once = false;
+				LOG_INF("Flashing mode entered... ");
+				LOG_INF("Please upload fw.bin file to the USB mass-storage drive.");
+				LOG_WRN("Disconnect USB cable and reboot device to continue.");
+			}
 		} while (isUsbOn || (timeout > 0));
 		break;
 
 	case MCUBOOT_STATUS_UPGRADING:
-		LOG_INF("==> UPGRADING");
+		LOG_INF("Upgrading boot image...");
 		break;
 
 	case MCUBOOT_STATUS_BOOTABLE_IMAGE_FOUND:
-		LOG_INF("==> BOOTABLE IMAGE FOUND");
+		LOG_INF("Bootable image found, booting...");
 		break;
 
 	case MCUBOOT_STATUS_NO_BOOTABLE_IMAGE_FOUND:
 	case MCUBOOT_STATUS_BOOT_FAILED:
-		LOG_ERR("==> %s", (status == MCUBOOT_STATUS_BOOT_FAILED) ? "BOOT FAILED" : "NO BOOTABLE IMAGE FOUND");
+		LOG_ERR("%s", (status == MCUBOOT_STATUS_BOOT_FAILED) ? "Boot failed! ;(" : "No bootable image ;(");
 
 		const char *error_msg_str = "OTHER BOOT ERROR";
 		if (status == MCUBOOT_STATUS_NO_BOOTABLE_IMAGE_FOUND)
