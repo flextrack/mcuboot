@@ -37,7 +37,7 @@ int myAps823_toggleWatchdog(void)
         return ret;
     }
 
-    LOG_INF("Toggle ex-watchdog!");
+    // LOG_INF("Toggle ex-watchdog!");
 
     return 0;
 }
@@ -68,7 +68,7 @@ int myAps823_disableWatchdogPulse(void)
         return -1;
     }
 
-    LOG_INF("Disable ex-watchdog for few seconds!");
+    // LOG_INF("Disable ex-watchdog for few seconds!");
 
     return 0;
 }
