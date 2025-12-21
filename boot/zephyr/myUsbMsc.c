@@ -239,4 +239,4 @@ int myUsbMsc_init(struct usbd_context *ctx, usbd_msg_cb_t msg_cb)
     }
 
     return 0;
-}
+}

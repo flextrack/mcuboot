@@ -257,6 +257,8 @@ static bool initUsb(void)
 
 void mcuboot_status_change(mcuboot_status_type_t status)
 {
+	int timeout;
+
 	switch (status)
 	{
 	case MCUBOOT_STATUS_NO_BOOTABLE_IMAGE_FOUND:
@@ -271,10 +273,15 @@ void mcuboot_status_change(mcuboot_status_type_t status)
 			error_msg_str = "BOOT FAILED";
 		}
 		initUsb();
-		while (1)
+
+		timeout = 60;
+		BOOT_LOG_ERR("%s! Enabling USB MSC for recovery upgrade for %d seconds!", error_msg_str, timeout);
+
+		while (timeout-- > 0)
 		{
-			BOOT_LOG_ERR("%s! Enabling USB MSC for recovery upgrade!", error_msg_str);
-			k_sleep(K_SECONDS(3));
+			MCUBOOT_WATCHDOG_FEED();
+			k_msleep(1000);
+			LOG_INF("-> %d seconds left", timeout);
 		}
 		break;
 

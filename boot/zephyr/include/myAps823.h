@@ -6,8 +6,6 @@ extern "C"
 {
 #endif
 
-#include <myUtils.h>
-
     int myAps823_disableWatchdogPulse(void);
     int myAps823_toggleWatchdog(void);
     int myAps823_init(void);
