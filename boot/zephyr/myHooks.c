@@ -27,14 +27,11 @@ static struct image_header hdr;
 
 static struct usbd_context *usb_ctx;
 
-static bool isUsbOn = false;
-
 static void usb_msg_cb(struct usbd_context *const ctx, const struct usbd_msg *msg)
 {
 	if (msg->type == USBD_MSG_CONFIGURATION)
 	{
 		LOG_INF("USB configured");
-		isUsbOn = true;
 	}
 
 	if (usbd_can_detect_vbus(ctx))
@@ -274,7 +271,7 @@ void mcuboot_status_change(mcuboot_status_type_t status)
 		{
 			MCUBOOT_WATCHDOG_FEED();
 			k_msleep(100);
-			if (!isUsbOn)
+			if (!myUsbMsc_isConnected())
 			{
 				timeout--;
 			}
@@ -285,7 +282,7 @@ void mcuboot_status_change(mcuboot_status_type_t status)
 				LOG_INF("Please upload fw.bin file to the USB mass-storage drive.");
 				LOG_WRN("Disconnect USB cable and reboot device to continue.");
 			}
-		} while (isUsbOn || (timeout > 0));
+		} while (myUsbMsc_isConnected() || (timeout > 0));
 		break;
 
 	case MCUBOOT_STATUS_UPGRADING:
@@ -299,16 +296,6 @@ void mcuboot_status_change(mcuboot_status_type_t status)
 	case MCUBOOT_STATUS_NO_BOOTABLE_IMAGE_FOUND:
 	case MCUBOOT_STATUS_BOOT_FAILED:
 		LOG_ERR("%s", (status == MCUBOOT_STATUS_BOOT_FAILED) ? "Boot failed! ;(" : "No bootable image ;(");
-
-		const char *error_msg_str = "OTHER BOOT ERROR";
-		if (status == MCUBOOT_STATUS_NO_BOOTABLE_IMAGE_FOUND)
-		{
-			error_msg_str = "NO BOOTABLE IMAGE FOUND";
-		}
-		else if (status == MCUBOOT_STATUS_BOOT_FAILED)
-		{
-			error_msg_str = "BOOT FAILED";
-		}
 
 		break;
 

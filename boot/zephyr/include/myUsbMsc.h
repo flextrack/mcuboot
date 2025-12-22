@@ -8,7 +8,8 @@ extern "C"
 
 #include <zephyr/usb/usbd.h>
 
-    int myUsbMsc_init(struct usbd_context *sample_usbd, usbd_msg_cb_t msg_cb);
+    bool myUsbMsc_isConnected(void);
+    int myUsbMsc_init(struct usbd_context *ctx, usbd_msg_cb_t msg_cb);
 
 #ifdef __cplusplus
 }

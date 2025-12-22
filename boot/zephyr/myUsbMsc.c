@@ -24,6 +24,8 @@ USBD_DEFINE_MSC_LUN(nand, "NAND", "Vestfrost", "EMD", "1.00");
 #define DESC_USBD_PRODUCT "EMD"
 #define DESC_USBD_MANUFACTURER "Vestfrost"
 
+static bool usb_initialized = false;
+
 /* By default, do not register the USB DFU class DFU mode instance. */
 static const char *const blocklist[] = {
     "dfu_dfu",
@@ -213,6 +215,22 @@ struct usbd_context *usbd_setup_device(usbd_msg_cb_t msg_cb)
     return &flex_usbd_context;
 }
 
+bool myUsbMsc_isConnected(void)
+{
+    if (!usb_initialized)
+    {
+        LOG_WRN("USB not initialized, cannot get connection state");
+        return false;
+    }
+
+#define USB_VBUS_DET_STAT_OFF (0x1C0)
+#define VBUS_VALID (1 << 3)
+
+    uint32_t base_addr = DT_REG_ADDR(DT_NODELABEL(anatop));
+    bool connected = *(uint32_t *)(base_addr + USB_VBUS_DET_STAT_OFF) & (1 << 3);
+    return connected;
+}
+
 int myUsbMsc_init(struct usbd_context *ctx, usbd_msg_cb_t msg_cb)
 {
     int ret;
@@ -237,6 +255,8 @@ int myUsbMsc_init(struct usbd_context *ctx, usbd_msg_cb_t msg_cb)
         LOG_ERR("Failed to enable USB device");
         return ret;
     }
+
+    usb_initialized = true;
 
     return 0;
 }
