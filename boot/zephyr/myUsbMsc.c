@@ -11,7 +11,6 @@
 #include <ff.h>
 
 #include "bootutil/bootutil_log.h"
-
 BOOT_LOG_MODULE_REGISTER(myUsbMsc);
 
 USBD_DEFINE_MSC_LUN(nand, "NAND", "Vestfrost", "EMD", "1.00");
@@ -24,6 +23,7 @@ USBD_DEFINE_MSC_LUN(nand, "NAND", "Vestfrost", "EMD", "1.00");
 #define DESC_USBD_PRODUCT "EMD"
 #define DESC_USBD_MANUFACTURER "Vestfrost"
 
+//
 static bool usb_initialized = false;
 
 /* By default, do not register the USB DFU class DFU mode instance. */
@@ -135,8 +135,7 @@ struct usbd_context *usbd_setup_device(usbd_msg_cb_t msg_cb)
         return NULL;
     }
 
-    IF_ENABLED(CONFIG_HWINFO, (
-                                  err = usbd_add_descriptor(&flex_usbd_context, &sample_sn);))
+    IF_ENABLED(CONFIG_HWINFO, (err = usbd_add_descriptor(&flex_usbd_context, &sample_sn);))
     if (err)
     {
         LOG_ERR("Failed to initialize SN descriptor (%d)", err);
@@ -144,19 +143,16 @@ struct usbd_context *usbd_setup_device(usbd_msg_cb_t msg_cb)
     }
     /* doc add string descriptor end */
 
-    if (USBD_SUPPORTS_HIGH_SPEED &&
-        usbd_caps_speed(&flex_usbd_context) == USBD_SPEED_HS)
+    if (USBD_SUPPORTS_HIGH_SPEED && usbd_caps_speed(&flex_usbd_context) == USBD_SPEED_HS)
     {
-        err = usbd_add_configuration(&flex_usbd_context, USBD_SPEED_HS,
-                                     &sample_hs_config);
+        err = usbd_add_configuration(&flex_usbd_context, USBD_SPEED_HS, &sample_hs_config);
         if (err)
         {
             LOG_ERR("Failed to add High-Speed configuration");
             return NULL;
         }
 
-        err = usbd_register_all_classes(&flex_usbd_context, USBD_SPEED_HS, 1,
-                                        blocklist);
+        err = usbd_register_all_classes(&flex_usbd_context, USBD_SPEED_HS, 1, blocklist);
         if (err)
         {
             LOG_ERR("Failed to add register classes");
@@ -167,8 +163,7 @@ struct usbd_context *usbd_setup_device(usbd_msg_cb_t msg_cb)
     }
 
     /* doc configuration register start */
-    err = usbd_add_configuration(&flex_usbd_context, USBD_SPEED_FS,
-                                 &sample_fs_config);
+    err = usbd_add_configuration(&flex_usbd_context, USBD_SPEED_FS, &sample_fs_config);
     if (err)
     {
         LOG_ERR("Failed to add Full-Speed configuration");
