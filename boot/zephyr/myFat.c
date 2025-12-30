@@ -70,7 +70,7 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
     while (1)
     {
         int bytes_read = fs_read(&fs_file_image, firmware_buf, CONFIG_IMG_BLOCK_BUF_SIZE);
-        if (bytes_read >= 0)
+        if (bytes_read > 0)
         {
             bool flush_remainder = bytes_read != CONFIG_IMG_BLOCK_BUF_SIZE;
             rc = flash_img_buffered_write(&flash_img_ctx, firmware_buf, bytes_read, flush_remainder);
@@ -79,7 +79,7 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
                 written += bytes_read;
                 if (!(log_counter++ % 100))
                 {
-                    BOOT_LOG_INF("Wrote %dB", written);
+                    BOOT_LOG_INF("Written %dB", written);
                     MCUBOOT_WATCHDOG_FEED();
                 }
                 if (flush_remainder)
@@ -96,11 +96,12 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
         else
         {
             BOOT_LOG_ERR("Failed to read data from \"%s\"", FIRMWARE_IMAGE_FILENAME);
+            break;
         }
     }
 
     written = flash_img_bytes_written(&flash_img_ctx);
-    BOOT_LOG_INF("Wrote %d bytes", written);
+    BOOT_LOG_INF("Written %d bytes", written);
 
     fs_close(&fs_file_image);
 
