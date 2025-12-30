@@ -30,7 +30,7 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
     mnt.fs_data = &fat_fs;
     mnt.mnt_point = "/NAND:";
 
-    BOOT_LOG_INF("Checking if new firmware image is waiting in FAT partition");
+    // BOOT_LOG_INF("Checking if new firmware image is waiting in FAT partition");
 
     rc = fs_mount(&mnt);
     if (rc < 0)
@@ -56,7 +56,7 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
     rc = fs_open(&fs_file_image, full_filename, FS_O_READ);
     if (rc < 0)
     {
-        BOOT_LOG_INF("No new firmware image file \"%s\" on FAT partition", FIRMWARE_IMAGE_FILENAME);
+        // BOOT_LOG_INF("No new firmware image file \"%s\" on FAT partition", FIRMWARE_IMAGE_FILENAME);
         fs_unmount(&mnt);
         return -1;
     }
@@ -173,14 +173,14 @@ int myFat_setupUsbMscDisk(void)
     }
     else
     {
-        BOOT_LOG_INF("Current volume label: %s", label);
+        BOOT_LOG_INF("EMD disk label: %s", label);
         if (strcmp(label, DISK_LABEL) != 0)
         {
-            BOOT_LOG_INF("Changing volume label to: %s", DISK_LABEL);
+            BOOT_LOG_INF("Changing disk label to: %s", DISK_LABEL);
             rc = f_setlabel(DISK_LABEL);
             if (rc < 0)
             {
-                BOOT_LOG_ERR("Failed to set volume label (%d)", rc);
+                BOOT_LOG_ERR("Failed to set disk label (%d)", rc);
             }
         }
     }
