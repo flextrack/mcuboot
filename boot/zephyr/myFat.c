@@ -3,6 +3,7 @@
 #include <ff.h>
 
 #include "bootutil/bootutil_log.h"
+#include "bootutil/image.h"
 
 BOOT_LOG_MODULE_REGISTER(myFat);
 
@@ -116,6 +117,12 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
     }
 
     fs_unmount(&mnt);
+
+    if (written < sizeof(struct image_header))
+    {
+        BOOT_LOG_ERR("Invalid image: image size < image header!");
+        return -1;
+    }
 
     return 0;
 }
