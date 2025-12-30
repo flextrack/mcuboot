@@ -197,14 +197,14 @@ fih_ret boot_go_hook(struct boot_rsp *rsp)
 	bool bsdata_changed = false;
 	if (bsdata.upgrade_request)
 	{
-		BOOT_LOG_INF("=> Upgrade request - booting from inactive slot (%d).", inactive_slot);
+		BOOT_LOG_INF("Upgrade request");
 		bsdata.upgrade_request = 0;
 		bsdata.booted_slot = inactive_slot;
 		bsdata_changed = true;
 	}
 	else
 	{
-		BOOT_LOG_INF(" => Normal - booting from active slot (%d).", bsdata.active_slot);
+		BOOT_LOG_INF("Normal boot");
 		/* If 'upgrade_request' is false, this should be true only if previous upgrade was not activated. */
 		if (bsdata.booted_slot != bsdata.active_slot)
 		{

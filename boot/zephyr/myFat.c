@@ -2,6 +2,8 @@
 #include <zephyr/dfu/flash_img.h>
 #include <ff.h>
 
+#include "myFoilLeds.h"
+
 #include "bootutil/bootutil_log.h"
 #include "bootutil/image.h"
 
@@ -78,9 +80,10 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
             if (rc == 0)
             {
                 written += bytes_read;
-                if (!(log_counter++ % 100))
+                if (!(log_counter++ % 10))
                 {
-                    BOOT_LOG_INF("Written %dB", written);
+                    BOOT_LOG_INF("Written %d bytes", written);
+                    myFoilLeds_setState(LED_FOIL_TOGGLE_BOTH);
                     MCUBOOT_WATCHDOG_FEED();
                 }
                 if (flush_remainder)
@@ -101,6 +104,7 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
         }
     }
 
+    myFoilLeds_setState(LED_FOIL_OFF);
     written = flash_img_bytes_written(&flash_img_ctx);
     BOOT_LOG_INF("Written %d bytes", written);
 
@@ -169,11 +173,11 @@ int myFat_setupUsbMscDisk(void)
     rc = f_getlabel("", label, NULL);
     if (rc < 0)
     {
-        BOOT_LOG_ERR("Failed to get volume label (%d)", rc);
+        BOOT_LOG_ERR("Failed to get disk label (%d)", rc);
     }
     else
     {
-        BOOT_LOG_INF("EMD disk label: %s", label);
+        BOOT_LOG_INF("Disk label: %s", label);
         if (strcmp(label, DISK_LABEL) != 0)
         {
             BOOT_LOG_INF("Changing disk label to: %s", DISK_LABEL);

@@ -75,6 +75,7 @@ zephyr_library_sources(
   myFat.c
   myUsbMsc.c
   myAps823.c
+  myFoilLeds.c
   )
 
 if(DEFINED CONFIG_ENABLE_MGMT_PERUSER)
