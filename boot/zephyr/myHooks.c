@@ -185,7 +185,7 @@ fih_ret boot_go_hook(struct boot_rsp *rsp)
 	int installed_from_fat_rc = myFat_installFirmwareFromFatFile(get_flash_area_id(inactive_slot));
 	if (installed_from_fat_rc == 0)
 	{
-		BOOT_LOG_INF("Firmware installed from USB");
+		BOOT_LOG_INF("New image written to inactive slot (%d) from FAT partition", inactive_slot);
 		if (bsdata.upgrade_request)
 		{
 			BOOT_LOG_WRN("If another firmware upgrade was triggered from the app, it will be overwritten!");
@@ -197,14 +197,14 @@ fih_ret boot_go_hook(struct boot_rsp *rsp)
 	bool bsdata_changed = false;
 	if (bsdata.upgrade_request)
 	{
-		BOOT_LOG_INF("FIRMWARE UPGRADE: Booting from inactive slot, clearing 'upgrade_request' flag");
+		BOOT_LOG_INF("Upgrade request - booting from inactive slot (%d).", inactive_slot);
 		bsdata.upgrade_request = 0;
 		bsdata.booted_slot = inactive_slot;
 		bsdata_changed = true;
 	}
 	else
 	{
-		BOOT_LOG_INF("NORMAL BOOT: Booting from active slot");
+		BOOT_LOG_INF("Normal - booting from active slot (%d).", bsdata.active_slot);
 		/* If 'upgrade_request' is false, this should be true only if previous upgrade was not activated. */
 		if (bsdata.booted_slot != bsdata.active_slot)
 		{
