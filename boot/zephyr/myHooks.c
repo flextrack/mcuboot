@@ -297,9 +297,6 @@ void mcuboot_status_change(mcuboot_status_type_t status)
 	case MCUBOOT_STATUS_NO_BOOTABLE_IMAGE_FOUND:
 	case MCUBOOT_STATUS_BOOT_FAILED:
 		LOG_ERR("%s", (status == MCUBOOT_STATUS_BOOT_FAILED) ? "Boot failed! ;(" : "No bootable image ;(");
-		MCUBOOT_WATCHDOG_FEED();
-		sys_reboot(SYS_REBOOT_WARM);
-
 		break;
 
 	default:
