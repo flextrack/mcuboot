@@ -4,6 +4,9 @@
 #include <zephyr/sys/reboot.h>
 #include "bootutil/mcuboot_status.h"
 
+#include <zephyr/version.h>
+#include <zephyr/app_version.h>
+
 #include "bootutil/bootutil.h"
 #include "bootutil/bootutil_log.h"
 #include "bootutil/fault_injection_hardening.h"
@@ -256,6 +259,8 @@ static bool initUsb(void)
 	return true;
 }
 
+#define TOSTRING(x) STRINGIFY(x) // Ensures expansion before stringification
+
 void mcuboot_status_change(mcuboot_status_type_t status)
 {
 	static bool once = true;
@@ -264,6 +269,8 @@ void mcuboot_status_change(mcuboot_status_type_t status)
 	switch (status)
 	{
 	case MCUBOOT_STATUS_STARTUP:
+		LOG_INF("App %s | Kernel %s | Compiled at %s %s", TOSTRING(APP_BUILD_VERSION), TOSTRING(BUILD_VERSION), __DATE__, __TIME__);
+
 		initUsb();
 
 		// wait for fw.bin upload over USB MSC
