@@ -72,6 +72,11 @@ zephyr_library_sources(
   os.c
   keys.c
   watchdog.c
+  myHooks.c
+  myFat.c
+  myUsbMsc.c
+  myAps823.c
+  myFoilLeds.c
   )
 
 if(DEFINED CONFIG_ENABLE_MGMT_PERUSER)
