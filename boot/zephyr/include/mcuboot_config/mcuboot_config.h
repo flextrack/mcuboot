@@ -15,12 +15,12 @@
 
 #ifdef CONFIG_BOOT_SIGNATURE_TYPE_RSA
 #define MCUBOOT_SIGN_RSA
-#  if (CONFIG_BOOT_SIGNATURE_TYPE_RSA_LEN != 2048 && \
-       CONFIG_BOOT_SIGNATURE_TYPE_RSA_LEN != 3072)
-#    error "Invalid RSA key size (must be 2048 or 3072)"
-#  else
-#    define MCUBOOT_SIGN_RSA_LEN CONFIG_BOOT_SIGNATURE_TYPE_RSA_LEN
-#  endif
+#if (CONFIG_BOOT_SIGNATURE_TYPE_RSA_LEN != 2048 && \
+     CONFIG_BOOT_SIGNATURE_TYPE_RSA_LEN != 3072)
+#error "Invalid RSA key size (must be 2048 or 3072)"
+#else
+#define MCUBOOT_SIGN_RSA_LEN CONFIG_BOOT_SIGNATURE_TYPE_RSA_LEN
+#endif
 #elif defined(CONFIG_BOOT_SIGNATURE_TYPE_ECDSA_P256)
 #define MCUBOOT_SIGN_EC256
 #elif defined(CONFIG_BOOT_SIGNATURE_TYPE_ED25519)
@@ -28,11 +28,11 @@
 #endif
 
 #if defined(CONFIG_BOOT_USE_TINYCRYPT)
-#  if defined(CONFIG_MBEDTLS) || defined(CONFIG_BOOT_USE_CC310)
-#     error "One crypto library implementation allowed at a time."
-#  endif
+#if defined(CONFIG_MBEDTLS) || defined(CONFIG_BOOT_USE_CC310)
+#error "One crypto library implementation allowed at a time."
+#endif
 #elif defined(CONFIG_MBEDTLS) && defined(CONFIG_BOOT_USE_CC310)
-#     error "One crypto library implementation allowed at a time."
+#error "One crypto library implementation allowed at a time."
 #endif
 
 #if defined(CONFIG_BOOT_KEY_IMPORT_BYPASS_ASN)
@@ -82,7 +82,7 @@
 
 #ifdef CONFIG_SINGLE_APPLICATION_SLOT
 #define MCUBOOT_SINGLE_APPLICATION_SLOT 1
-#define MCUBOOT_IMAGE_NUMBER    1
+#define MCUBOOT_IMAGE_NUMBER 1
 #else
 
 #ifdef CONFIG_BOOT_SWAP_USING_MOVE
@@ -116,9 +116,9 @@
 #endif
 
 #ifdef CONFIG_UPDATEABLE_IMAGE_NUMBER
-#define MCUBOOT_IMAGE_NUMBER    CONFIG_UPDATEABLE_IMAGE_NUMBER
+#define MCUBOOT_IMAGE_NUMBER CONFIG_UPDATEABLE_IMAGE_NUMBER
 #else
-#define MCUBOOT_IMAGE_NUMBER    1
+#define MCUBOOT_IMAGE_NUMBER 1
 #endif
 
 #ifdef CONFIG_BOOT_VERSION_CMP_USE_BUILD_NUMBER
@@ -132,9 +132,9 @@
 #endif /* CONFIG_SINGLE_APPLICATION_SLOT */
 
 #ifdef CONFIG_SINGLE_APPLICATION_SLOT_RAM_LOAD
-#define MCUBOOT_RAM_LOAD    1
-#define MCUBOOT_IMAGE_NUMBER    1
-#define MCUBOOT_SINGLE_APPLICATION_SLOT_RAM_LOAD    1
+#define MCUBOOT_RAM_LOAD 1
+#define MCUBOOT_IMAGE_NUMBER 1
+#define MCUBOOT_SINGLE_APPLICATION_SLOT_RAM_LOAD 1
 #define IMAGE_EXECUTABLE_RAM_START CONFIG_BOOT_IMAGE_EXECUTABLE_RAM_START
 #define IMAGE_EXECUTABLE_RAM_SIZE CONFIG_BOOT_IMAGE_EXECUTABLE_RAM_SIZE
 #endif
@@ -219,11 +219,11 @@
 /* MCUBOOT_DOWNGRADE_PREVENTION_SECURITY_COUNTER is used later as bool value so it is
  * always defined, (unlike MCUBOOT_DOWNGRADE_PREVENTION which is only used in
  * preprocessor condition and my be not defined) */
-#  ifdef CONFIG_MCUBOOT_DOWNGRADE_PREVENTION_SECURITY_COUNTER
-#    define MCUBOOT_DOWNGRADE_PREVENTION_SECURITY_COUNTER 1
-#  else
-#    define MCUBOOT_DOWNGRADE_PREVENTION_SECURITY_COUNTER 0
-#  endif
+#ifdef CONFIG_MCUBOOT_DOWNGRADE_PREVENTION_SECURITY_COUNTER
+#define MCUBOOT_DOWNGRADE_PREVENTION_SECURITY_COUNTER 1
+#else
+#define MCUBOOT_DOWNGRADE_PREVENTION_SECURITY_COUNTER 0
+#endif
 #endif
 
 #ifdef CONFIG_MCUBOOT_HW_DOWNGRADE_PREVENTION
@@ -399,21 +399,21 @@
 
 #if (defined(CONFIG_BOOT_USB_DFU_WAIT) || \
      defined(CONFIG_BOOT_USB_DFU_GPIO))
-#  ifndef CONFIG_MULTITHREADING
-#    error "USB DFU Requires MULTITHREADING"
-#  endif
+#ifndef CONFIG_MULTITHREADING
+#error "USB DFU Requires MULTITHREADING"
+#endif
 #endif
 
 #if defined(CONFIG_BOOT_MAX_IMG_SECTORS_AUTO) && defined(MIN_SECTOR_COUNT)
 
-#define MCUBOOT_MAX_IMG_SECTORS       MIN_SECTOR_COUNT
+#define MCUBOOT_MAX_IMG_SECTORS MIN_SECTOR_COUNT
 
 #elif defined(CONFIG_BOOT_MAX_IMG_SECTORS)
 
-#define MCUBOOT_MAX_IMG_SECTORS       CONFIG_BOOT_MAX_IMG_SECTORS
+#define MCUBOOT_MAX_IMG_SECTORS CONFIG_BOOT_MAX_IMG_SECTORS
 
 #else
-#define MCUBOOT_MAX_IMG_SECTORS       128
+#define MCUBOOT_MAX_IMG_SECTORS 128
 #endif
 
 #ifdef CONFIG_BOOT_SERIAL_MAX_RECEIVE_SIZE
@@ -443,9 +443,10 @@
 #define MCUBOOT_BOOTUTIL_LIB_FOR_DIRECT_XIP 1
 #endif
 
-#define MCUBOOT_CPU_IDLE() \
-  if (!IS_ENABLED(CONFIG_MULTITHREADING)) { \
-    k_cpu_idle(); \
-  }
+#define MCUBOOT_CPU_IDLE()                  \
+    if (!IS_ENABLED(CONFIG_MULTITHREADING)) \
+    {                                       \
+        k_cpu_idle();                       \
+    }
 
 #endif /* __MCUBOOT_CONFIG_H__ */
