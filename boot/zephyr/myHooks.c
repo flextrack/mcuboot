@@ -165,7 +165,7 @@ void pring_big_info(int slot)
 fih_ret boot_go_hook(struct boot_rsp *rsp)
 {
 	// Open "boot_state" partition
-	int err = boot_state_init();
+	int err = boot_state_initialize();
 	if (err)
 	{
 		BOOT_LOG_ERR("Failed to open 'boot_state' partition: %d", err);
@@ -304,4 +304,15 @@ void mcuboot_status_change(mcuboot_status_type_t status)
 	default:
 		break;
 	}
+}
+
+void mcuboot_watchdog_setup(void)
+{
+	myAps823_init();
+	myAps823_disableWatchdogPulse();
+}
+
+void mcuboot_watchdog_feed(void)
+{
+	myAps823_disableWatchdogPulse();
 }
