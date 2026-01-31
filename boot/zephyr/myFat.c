@@ -19,6 +19,30 @@ static BYTE work[FF_MAX_SS];
 char full_filename[FILENAME_PATH_SIZE];
 char firmware_buf[CONFIG_IMG_BLOCK_BUF_SIZE];
 
+static inline void fmt_bytes(char *out, size_t out_sz, uint32_t bytes)
+{
+    if (bytes < 1024U)
+    {
+        snprintk(out, out_sz, "%u B", (unsigned)bytes);
+    }
+    else if (bytes < (1024U * 1024U))
+    {
+        /* KiB with 1 decimal place */
+        unsigned kib_int = bytes >> 10;                     /* /1024 */
+        unsigned kib_frac = ((bytes & 0x3FFU) * 10U) >> 10; /* *10 /1024 */
+
+        snprintk(out, out_sz, "%u.%u KiB", kib_int, kib_frac);
+    }
+    else
+    {
+        /* MiB with 2 decimal places */
+        unsigned mib_int = bytes >> 20;                        /* /1MiB */
+        unsigned mib_frac = ((bytes & 0xFFFFFU) * 100U) >> 20; /* *100 /1MiB */
+
+        snprintk(out, out_sz, "%u.%02u MiB", mib_int, mib_frac);
+    }
+}
+
 int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
 {
     int rc;
@@ -82,7 +106,10 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
                 written += bytes_read;
                 if (!(log_counter++ % 10))
                 {
-                    BOOT_LOG_INF("Written %d bytes", written);
+                    char wbuf[16];
+                    fmt_bytes(wbuf, sizeof(wbuf), written);
+                    BOOT_LOG_INF("Written: %s", wbuf);
+
                     myFoilLeds_setState(LED_FOIL_TOGGLE_BOTH);
                     MCUBOOT_WATCHDOG_FEED();
                 }
