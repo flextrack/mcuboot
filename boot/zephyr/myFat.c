@@ -43,11 +43,55 @@ static inline void fmt_bytes(char *out, size_t out_sz, uint32_t bytes)
     }
 }
 
+static void fmt_kb_mb(char *buf, unsigned int buf_len, unsigned int bytes)
+{
+    if (bytes < (1024 * 1024))
+    {
+        /* KB */
+        int kb = (bytes + 1023) / 1024; /* zaokrąglenie w górę */
+        snprintf(buf, buf_len, "%u KB", kb);
+    }
+    else
+    {
+        /* MB with 2 decimal places */
+        unsigned int mb_int = bytes / (1024 * 1024);
+        unsigned int mb_frac = (bytes % (1024 * 1024)) * 100 / (1024 * 1024);
+
+        snprintf(buf, buf_len, "%u.%02u MB", mb_int, mb_frac);
+    }
+}
+
+static void log_progress_line(unsigned int written, unsigned int total)
+{
+    char line[96];
+    char bar[21]; /* 20 + '\0' */
+    char wbuf[16];
+    char tbuf[16];
+
+    int percent = total ? (int)((written * 100U) / total) : 0;
+    int bars = percent / 5; /* 0..20 */
+
+    for (int i = 0; i < 20; i++)
+    {
+        bar[i] = (i < bars) ? '#' : ' ';
+    }
+    bar[20] = '\0';
+
+    fmt_kb_mb(wbuf, sizeof(wbuf), written);
+    fmt_kb_mb(tbuf, sizeof(tbuf), total);
+
+    /* bar ma zawsze dokładnie 20 znaków, więc nie potrzeba %-20s */
+    (void)snprintf(line, sizeof(line), "[%s] %3d%%  %s / %s", bar, percent, wbuf, tbuf);
+
+    printk("\r%s", line);
+}
+
 int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
 {
     int rc;
     struct fs_mount_t mnt;
     static FATFS fat_fs;
+    struct fs_dirent entry;
 
     memset(&mnt, 0, sizeof(mnt));
     memset(&fat_fs, 0, sizeof(fat_fs));
@@ -88,7 +132,17 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
     }
     else
     {
-        BOOT_LOG_INF("New firmware image file \"%s\" found!", FIRMWARE_IMAGE_FILENAME);
+
+        rc = fs_stat(full_filename, &entry);
+        if (rc < 0)
+        {
+            // BOOT_LOG_ERR("fs_stat failed (%d)", rc);
+            fs_unmount(&mnt);
+            return -1;
+        }
+        char size_buf[16];
+        fmt_kb_mb(size_buf, sizeof(size_buf), entry.size);
+        BOOT_LOG_INF("New firmware image file \"%s\" found! (%s)", FIRMWARE_IMAGE_FILENAME, size_buf);
     }
 
     int written = 0;
@@ -104,12 +158,10 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
             if (rc == 0)
             {
                 written += bytes_read;
+
                 if (!(log_counter++ % 10))
                 {
-                    char wbuf[16];
-                    fmt_bytes(wbuf, sizeof(wbuf), written);
-                    BOOT_LOG_INF("Written: %s", wbuf);
-
+                    log_progress_line(written, entry.size);
                     myFoilLeds_setState(LED_FOIL_TOGGLE_BOTH);
                     MCUBOOT_WATCHDOG_FEED();
                 }
@@ -130,6 +182,7 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
             break;
         }
     }
+    printk("\n");
 
     myFoilLeds_setState(LED_FOIL_OFF);
     written = flash_img_bytes_written(&flash_img_ctx);
