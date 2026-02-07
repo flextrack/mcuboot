@@ -16,18 +16,12 @@ USBD_DEFINE_MSC_LUN(nand, "NAND", "Vestfrost", "EMD", "1.00");
 #define FLEXTRACK_USB_VID 0x2fe3
 #define FLEXTRACK_USBD_PID 0x0008
 
-#define USBD_MAX_POWER 50
+#define USBD_MAX_POWER 200 // 200 * 2mA = 400mA
 
 #define DESC_USBD_PRODUCT "EMD"
 #define DESC_USBD_MANUFACTURER "Vestfrost"
 
 static bool usb_stack_initialized = false;
-
-/* By default, do not register the USB DFU class DFU mode instance. */
-static const char *const blocklist[] = {
-    "dfu_dfu",
-    NULL,
-};
 
 /* doc device instantiation start */
 /*
@@ -52,8 +46,7 @@ USBD_DESC_CONFIG_DEFINE(fs_cfg_desc, "FS Configuration");
 USBD_DESC_CONFIG_DEFINE(hs_cfg_desc, "HS Configuration");
 
 /* doc configuration instantiation start */
-static const uint8_t attributes = (IS_ENABLED(CONFIG_SAMPLE_USBD_SELF_POWERED) ? USB_SCD_SELF_POWERED : 0) |
-                                  (IS_ENABLED(CONFIG_SAMPLE_USBD_REMOTE_WAKEUP) ? USB_SCD_REMOTE_WAKEUP : 0);
+static const uint8_t attributes = 0; // USB_SCD_SELF_POWERED | USB_SCD_REMOTE_WAKEUP
 
 /* Full speed configuration */
 USBD_CONFIGURATION_DEFINE(sample_fs_config,
@@ -149,7 +142,7 @@ struct usbd_context *usbd_setup_device(usbd_msg_cb_t msg_cb)
             return NULL;
         }
 
-        err = usbd_register_all_classes(&flex_usbd_context, USBD_SPEED_HS, 1, blocklist);
+        err = usbd_register_all_classes(&flex_usbd_context, USBD_SPEED_HS, 1, NULL);
         if (err)
         {
             LOG_ERR("Failed to add register classes");
@@ -169,7 +162,7 @@ struct usbd_context *usbd_setup_device(usbd_msg_cb_t msg_cb)
     /* doc configuration register end */
 
     /* doc functions register start */
-    err = usbd_register_all_classes(&flex_usbd_context, USBD_SPEED_FS, 1, blocklist);
+    err = usbd_register_all_classes(&flex_usbd_context, USBD_SPEED_FS, 1, NULL);
     if (err)
     {
         LOG_ERR("Failed to add register classes");
@@ -286,4 +279,27 @@ int myUsbMsc_disable(struct usbd_context *ctx)
     }
 
     return 0;
+}
+
+int myUsbMsc_speed(struct usbd_context *ctx)
+{
+    int ret;
+
+    if (usbd_bus_speed(ctx) == USBD_SPEED_HS)
+    {
+        LOG_INF("USB High-Speed (480 Mbps)");
+        ret = USBD_SPEED_HS;
+    }
+    else if (usbd_bus_speed(ctx) == USBD_SPEED_FS)
+    {
+        LOG_INF("USB Full-Speed (12 Mbps)");
+        ret = USBD_SPEED_FS;
+    }
+    else
+    {
+        LOG_INF("USB speed unknown / not enumerated yet");
+        ret = -1;
+    }
+
+    return ret;
 }

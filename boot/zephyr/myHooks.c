@@ -33,6 +33,7 @@ static void usb_msg_cb(struct usbd_context *const ctx, const struct usbd_msg *ms
 	if (msg->type == USBD_MSG_CONFIGURATION)
 	{
 		LOG_INF("USB configured");
+		myUsbMsc_speed(ctx);
 	}
 
 	if (usbd_can_detect_vbus(ctx))

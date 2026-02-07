@@ -12,6 +12,7 @@ extern "C"
     int myUsbMsc_init(struct usbd_context **ctx, usbd_msg_cb_t msg_cb);
     int myUsbMsc_enable(struct usbd_context *ctx);
     int myUsbMsc_disable(struct usbd_context *ctx);
+    int myUsbMsc_speed(struct usbd_context *ctx);
 
 #ifdef __cplusplus
 }
