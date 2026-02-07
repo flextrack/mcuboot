@@ -235,27 +235,6 @@ fih_ret boot_go_hook(struct boot_rsp *rsp)
 	return FIH_SUCCESS;
 }
 
-static bool initUsb(void)
-{
-	// Setup FAT filesystem for USB MSC if corrupted or not set yet
-	if (myFat_setupUsbMscDisk() != 0)
-	{
-		BOOT_LOG_ERR("Failed to setup USB MSC disk");
-		return false;
-	}
-
-	// Initialize USB MSC
-	if (myUsbMsc_init(usb_ctx, usb_msg_cb) != 0)
-	{
-		BOOT_LOG_ERR("Failed to initialize USB MSC");
-		return false;
-	}
-
-	// LOG_INF("USB initialized successfully");
-
-	return true;
-}
-
 void mcuboot_status_change(mcuboot_status_type_t status)
 {
 	static bool once = true;
@@ -266,7 +245,23 @@ void mcuboot_status_change(mcuboot_status_type_t status)
 	case MCUBOOT_STATUS_STARTUP:
 		LOG_INF("Compiled at %s %s", __DATE__, __TIME__);
 
-		initUsb();
+		// Setup FAT filesystem for USB MSC if corrupted or not set yet
+		if (myFat_setupUsbMscDisk() != 0)
+		{
+			BOOT_LOG_ERR("Failed to setup USB MSC disk");
+		}
+
+		// Initialize USB MSC
+		if (myUsbMsc_init(&usb_ctx, usb_msg_cb) != 0)
+		{
+			BOOT_LOG_ERR("Failed to initialize USB MSC");
+		}
+
+		// Enable USB MSC
+		if (myUsbMsc_enable(usb_ctx) != 0)
+		{
+			BOOT_LOG_ERR("Failed to enable USB MSC");
+		}
 
 		// wait for fw.bin upload over USB MSC
 		timeout = 5;
@@ -274,7 +269,7 @@ void mcuboot_status_change(mcuboot_status_type_t status)
 		{
 			MCUBOOT_WATCHDOG_FEED();
 			k_msleep(100);
-			if (!myUsbMsc_isConnected())
+			if (!myUsbMsc_isVbusDetected())
 			{
 				timeout--;
 			}
@@ -285,7 +280,14 @@ void mcuboot_status_change(mcuboot_status_type_t status)
 				LOG_INF("Please upload fw.bin file to the USB mass-storage drive.");
 				LOG_WRN("Disconnect USB cable and reboot device to continue.");
 			}
-		} while (myUsbMsc_isConnected() || (timeout > 0));
+		} while (myUsbMsc_isVbusDetected() || (timeout > 0));
+
+		// Disable USB MSC
+		if (myUsbMsc_disable(usb_ctx) != 0)
+		{
+			BOOT_LOG_ERR("Failed to disable USB MSC");
+		}
+
 		break;
 
 	case MCUBOOT_STATUS_UPGRADING:

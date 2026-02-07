@@ -81,7 +81,7 @@ static void log_progress_line(unsigned int written, unsigned int total)
     fmt_kb_mb(tbuf, sizeof(tbuf), total);
 
     /* bar ma zawsze dokładnie 20 znaków, więc nie potrzeba %-20s */
-    (void)snprintf(line, sizeof(line), "[%s] %3d%%  %s / %s", bar, percent, wbuf, tbuf);
+    (void)snprintf(line, sizeof(line), "Flashing [%s] %3d%%  %s / %s", bar, percent, wbuf, tbuf);
 
     printk("\r%s", line);
 }
@@ -146,7 +146,6 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
     }
 
     int written = 0;
-    int log_counter = 0;
 
     while (1)
     {
@@ -159,12 +158,10 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
             {
                 written += bytes_read;
 
-                if (!(log_counter++ % 10))
-                {
-                    log_progress_line(written, entry.size);
-                    myFoilLeds_setState(LED_FOIL_TOGGLE_BOTH);
-                    MCUBOOT_WATCHDOG_FEED();
-                }
+                log_progress_line(written, entry.size);
+                myFoilLeds_setState(LED_FOIL_TOGGLE_BOTH);
+                MCUBOOT_WATCHDOG_FEED();
+
                 if (flush_remainder)
                 {
                     break;

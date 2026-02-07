@@ -1,12 +1,10 @@
-#include <stdio.h>
-#include <stdint.h>
-
 #include <zephyr/kernel.h>
 #include <zephyr/usb/usbd.h>
 #include <zephyr/usb/class/usbd_msc.h>
 #include <zephyr/usb/bos.h>
 #include <zephyr/fs/fs.h>
 #include <zephyr/device.h>
+#include <zephyr/sys/sys_io.h>
 
 #include <ff.h>
 
@@ -23,8 +21,7 @@ USBD_DEFINE_MSC_LUN(nand, "NAND", "Vestfrost", "EMD", "1.00");
 #define DESC_USBD_PRODUCT "EMD"
 #define DESC_USBD_MANUFACTURER "Vestfrost"
 
-//
-static bool usb_initialized = false;
+static bool usb_stack_initialized = false;
 
 /* By default, do not register the USB DFU class DFU mode instance. */
 static const char *const blocklist[] = {
@@ -210,48 +207,83 @@ struct usbd_context *usbd_setup_device(usbd_msg_cb_t msg_cb)
     return &flex_usbd_context;
 }
 
-bool myUsbMsc_isConnected(void)
+bool myUsbMsc_isVbusDetected(void)
 {
-    if (!usb_initialized)
-    {
-        LOG_WRN("USB not initialized, cannot get connection state");
-        return false;
-    }
-
 #define USB_VBUS_DET_STAT_OFF (0x1C0)
 #define VBUS_VALID (1 << 3)
 
     uint32_t base_addr = DT_REG_ADDR(DT_NODELABEL(anatop));
-    bool connected = *(uint32_t *)(base_addr + USB_VBUS_DET_STAT_OFF) & (1 << 3);
-    return connected;
+    bool vbus_detected = false;
+
+    if (sys_read32(base_addr + USB_VBUS_DET_STAT_OFF) & VBUS_VALID)
+    {
+        vbus_detected = true;
+    }
+
+    return vbus_detected;
 }
 
-int myUsbMsc_init(struct usbd_context *ctx, usbd_msg_cb_t msg_cb)
+int myUsbMsc_init(struct usbd_context **ctx, usbd_msg_cb_t msg_cb)
 {
     int ret;
 
-    ctx = usbd_setup_device(msg_cb);
-    if (ctx == NULL)
+    if (usb_stack_initialized)
     {
-        LOG_ERR("Failed to setup USB device");
+        LOG_WRN("USB stack already initialized");
         return 0;
     }
 
-    ret = usbd_init(ctx);
+    *ctx = usbd_setup_device(msg_cb);
+    if (*ctx == NULL)
+    {
+        LOG_ERR("Failed to setup USB device");
+        return -1;
+    }
+
+    ret = usbd_init(*ctx);
     if (ret)
     {
         LOG_ERR("Failed to initialize USB device");
         return ret;
     }
 
-    ret = usbd_enable(ctx);
+    usb_stack_initialized = true;
+
+    return 0;
+}
+
+int myUsbMsc_enable(struct usbd_context *ctx)
+{
+    if (!usb_stack_initialized || ctx == NULL)
+    {
+        LOG_ERR("USB stack not initialized or context is NULL");
+        return -1;
+    }
+
+    int ret = usbd_enable(ctx);
     if (ret)
     {
         LOG_ERR("Failed to enable USB device");
         return ret;
     }
 
-    usb_initialized = true;
+    return 0;
+}
+
+int myUsbMsc_disable(struct usbd_context *ctx)
+{
+    if (!usb_stack_initialized || ctx == NULL)
+    {
+        LOG_ERR("USB stack not initialized or context is NULL");
+        return -1;
+    }
+
+    int ret = usbd_disable(ctx);
+    if (ret)
+    {
+        LOG_ERR("Failed to disable USB device");
+        return ret;
+    }
 
     return 0;
 }
