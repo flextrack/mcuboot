@@ -15,6 +15,13 @@ BOOT_LOG_MODULE_REGISTER(myFat);
 
 static BYTE work[FF_MAX_SS];
 
+static FATFS fat_fs;
+static struct fs_mount_t mnt = {
+    .type = FS_FATFS,
+    .fs_data = &fat_fs,
+    .mnt_point = "/NAND:",
+};
+
 #define FILENAME_PATH_SIZE (128)
 char full_filename[FILENAME_PATH_SIZE];
 char firmware_buf[CONFIG_IMG_BLOCK_BUF_SIZE];
@@ -89,16 +96,9 @@ static void log_progress_line(unsigned int written, unsigned int total)
 int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
 {
     int rc;
-    struct fs_mount_t mnt;
-    static FATFS fat_fs;
     struct fs_dirent entry;
 
-    memset(&mnt, 0, sizeof(mnt));
     memset(&fat_fs, 0, sizeof(fat_fs));
-
-    mnt.type = FS_FATFS;
-    mnt.fs_data = &fat_fs;
-    mnt.mnt_point = "/NAND:";
 
     // BOOT_LOG_INF("Checking if new firmware image is waiting in FAT partition");
 
