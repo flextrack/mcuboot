@@ -210,17 +210,10 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
 
 int myFat_setupUsbMscDisk(void)
 {
-    struct fs_mount_t mnt;
     int rc;
     char label[35];
-    FATFS fat_fs;
 
-    memset(&mnt, 0, sizeof(mnt));
     memset(&fat_fs, 0, sizeof(fat_fs));
-
-    mnt.type = FS_FATFS;
-    mnt.fs_data = &fat_fs;
-    mnt.mnt_point = "/NAND:";
 
     rc = fs_mount(&mnt);
     if (rc < 0)
