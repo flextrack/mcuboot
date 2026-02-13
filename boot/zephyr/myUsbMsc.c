@@ -11,7 +11,7 @@
 #include "bootutil/bootutil_log.h"
 BOOT_LOG_MODULE_REGISTER(myUsbMsc);
 
-USBD_DEFINE_MSC_LUN(nand, "NAND", "Vestfrost", "EMD", "1.00");
+USBD_DEFINE_MSC_LUN(nor, "NOR", "Vestfrost", "EMD", "1.00");
 
 #define FLEXTRACK_USB_VID 0x2fe3
 #define FLEXTRACK_USBD_PID 0x0008

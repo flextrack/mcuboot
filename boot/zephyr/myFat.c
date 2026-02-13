@@ -19,7 +19,7 @@ static FATFS fat_fs;
 static struct fs_mount_t mnt = {
     .type = FS_FATFS,
     .fs_data = &fat_fs,
-    .mnt_point = "/NAND:",
+    .mnt_point = "/NOR:",
 };
 
 #define FILENAME_PATH_SIZE (128)
@@ -219,7 +219,7 @@ int myFat_setupUsbMscDisk(void)
     if (rc < 0)
     {
         BOOT_LOG_WRN("Failed to mount, creating new FAT filesystem");
-        rc = f_mkfs("/NAND", NULL, work, sizeof(work));
+        rc = f_mkfs("/NOR", NULL, work, sizeof(work));
         if (rc < 0)
         {
             BOOT_LOG_ERR("Failed to create new FAT filesystem!");
