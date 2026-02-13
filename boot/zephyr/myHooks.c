@@ -283,10 +283,17 @@ void mcuboot_status_change(mcuboot_status_type_t status)
 			}
 		} while (myUsbMsc_isVbusDetected() || (timeout > 0));
 
+		k_msleep(100);
+
 		// Disable USB MSC
 		if (myUsbMsc_disable(usb_ctx) != 0)
 		{
 			BOOT_LOG_ERR("Failed to disable USB MSC");
+		}
+
+		if (myUsbMsc_shutdown(usb_ctx) != 0)
+		{
+			BOOT_LOG_ERR("Failed to shutdown USB MSC");
 		}
 
 		break;

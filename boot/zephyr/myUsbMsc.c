@@ -281,6 +281,25 @@ int myUsbMsc_disable(struct usbd_context *ctx)
     return 0;
 }
 
+int myUsbMsc_shutdown(struct usbd_context *ctx)
+{
+    if (!usb_stack_initialized || ctx == NULL)
+    {
+        LOG_ERR("USB stack not initialized or context is NULL");
+        return -1;
+    }
+
+    int ret = usbd_shutdown(ctx);
+    if (ret)
+    {
+        LOG_ERR("Failed to shutdown USB device");
+        return ret;
+    }
+
+    usb_stack_initialized = false;
+    return 0;
+}
+
 int myUsbMsc_speed(struct usbd_context *ctx)
 {
     int ret;
