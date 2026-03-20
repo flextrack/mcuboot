@@ -72,6 +72,7 @@ zephyr_library_sources(
   os.c
   keys.c
   watchdog.c
+  myTest.c
   myHooks.c
   myFat.c
   myUsbMsc.c

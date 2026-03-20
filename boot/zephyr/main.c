@@ -28,6 +28,7 @@
 #include <zephyr/usb/usb_device.h>
 #include <soc.h>
 #include <zephyr/linker/linker-defs.h>
+#include "myTest.h"
 
 #if defined(CONFIG_BOOT_DISABLE_CACHES)
 #include <zephyr/cache.h>
@@ -624,7 +625,7 @@ int main(void)
     {
         FIH_CALL(boot_go, fih_rc, &rsp);
     }
-    BOOT_LOG_DBG("Left boot_go with success == %d", FIH_EQ(fih_rc, FIH_SUCCESS) ? 1 : 0);
+    BOOT_LOG_INF("Prepared image on sram with success == %d", FIH_EQ(fih_rc, FIH_SUCCESS) ? 1 : 0);
 
 #ifdef CONFIG_BOOT_SERIAL_BOOT_MODE
     if (io_detect_boot_mode())
@@ -680,11 +681,11 @@ int main(void)
 
     MCUBOOT_WATCHDOG_FEED();
 #ifdef MCUBOOT_RAM_LOAD
-    BOOT_LOG_INF("Bootloader chainload address offset: 0x%x",
-                 rsp.br_hdr->ih_load_addr);
+    BOOT_LOG_INF("Bootloader chainload address offset: 0x%x, flash device ID: %d",
+                 rsp.br_hdr->ih_load_addr, rsp.br_flash_dev_id);
 #else
-    BOOT_LOG_INF("Bootloader chainload address offset: 0x%x",
-                 rsp.br_image_off);
+    BOOT_LOG_INF("Bootloader chainload address offset: 0x%x, flash device ID: %d",
+                 rsp.br_image_off, rsp.br_flash_dev_id);
 #endif
 
     BOOT_LOG_INF("Image version: v%d.%d.%d", rsp.br_hdr->ih_ver.iv_major,
@@ -698,6 +699,9 @@ int main(void)
 #endif
 
     mcuboot_status_change(MCUBOOT_STATUS_BOOTABLE_IMAGE_FOUND);
+
+    mytest_show_clocks();
+    mytest_check_vector_table(rsp.br_hdr->ih_load_addr + rsp.br_hdr->ih_hdr_size);
 
     MCUBOOT_WATCHDOG_FEED();
     ZEPHYR_BOOT_LOG_STOP();
