@@ -32,6 +32,38 @@
 #define MYTEST_VALID_RAM_END 0x81000000u
 #endif
 
+#ifndef MYTEST_ENABLE_EXEC_TEST
+#define MYTEST_ENABLE_EXEC_TEST 1
+#endif
+
+typedef uint32_t (*mytest_exec_fn_t)(void);
+
+enum mytest_fail_bits
+{
+    MYTEST_FAIL_SDRAM_PATTERN = (1u << 0),
+    MYTEST_FAIL_SDRAM_STRIDE = (1u << 1),
+    MYTEST_FAIL_VECTOR_MSP_RANGE = (1u << 2),
+    MYTEST_FAIL_VECTOR_RESET_THUMB = (1u << 3),
+    MYTEST_FAIL_VECTOR_RESET_RANGE = (1u << 4),
+    MYTEST_FAIL_EXEC_FROM_SDRAM = (1u << 5),
+};
+
+struct mytest_fail_desc
+{
+    uint32_t bit;
+    const char *name;
+};
+
+static const struct mytest_fail_desc g_mytest_fail_desc[] =
+    {
+        {MYTEST_FAIL_SDRAM_PATTERN, "sdram pattern"},
+        {MYTEST_FAIL_SDRAM_STRIDE, "sdram stride"},
+        {MYTEST_FAIL_VECTOR_MSP_RANGE, "vector msp range"},
+        {MYTEST_FAIL_VECTOR_RESET_THUMB, "vector reset thumb"},
+        {MYTEST_FAIL_VECTOR_RESET_RANGE, "vector reset range"},
+        {MYTEST_FAIL_EXEC_FROM_SDRAM, "exec from sdram"},
+};
+
 static bool addr_in_range(uint32_t addr, uint32_t start, uint32_t end)
 {
     return (addr >= start) && (addr < end);
@@ -42,7 +74,6 @@ static int sdram_pattern_test(uint32_t base_addr, size_t words)
     volatile uint32_t *p = (volatile uint32_t *)base_addr;
     size_t i;
 
-    /* Pattern 1 */
     for (i = 0; i < words; ++i)
     {
         p[i] = 0xAAAAAAAAu ^ (uint32_t)i;
@@ -54,15 +85,10 @@ static int sdram_pattern_test(uint32_t base_addr, size_t words)
         uint32_t got = p[i];
         if (got != expected)
         {
-            printk("SDRAM test fail P1 at 0x%08x: got=0x%08x exp=0x%08x\n",
-                   (unsigned int)(base_addr + i * 4u),
-                   (unsigned int)got,
-                   (unsigned int)expected);
             return -1;
         }
     }
 
-    /* Pattern 2 */
     for (i = 0; i < words; ++i)
     {
         p[i] = 0x55555555u ^ ((uint32_t)i * 0x01010101u);
@@ -74,10 +100,6 @@ static int sdram_pattern_test(uint32_t base_addr, size_t words)
         uint32_t got = p[i];
         if (got != expected)
         {
-            printk("SDRAM test fail P2 at 0x%08x: got=0x%08x exp=0x%08x\n",
-                   (unsigned int)(base_addr + i * 4u),
-                   (unsigned int)got,
-                   (unsigned int)expected);
             return -2;
         }
     }
@@ -90,29 +112,32 @@ static int sdram_stride_test(uint32_t base_addr, size_t bytes, size_t stride)
     volatile uint32_t *p;
     size_t i;
     size_t words = bytes / sizeof(uint32_t);
+    size_t step_words;
 
     if (stride < sizeof(uint32_t))
     {
         stride = sizeof(uint32_t);
     }
 
+    step_words = stride / sizeof(uint32_t);
+    if (step_words == 0u)
+    {
+        step_words = 1u;
+    }
+
     p = (volatile uint32_t *)base_addr;
 
-    for (i = 0; i < words; i += (stride / sizeof(uint32_t)))
+    for (i = 0; i < words; i += step_words)
     {
         p[i] = 0x12340000u | (uint32_t)i;
     }
 
-    for (i = 0; i < words; i += (stride / sizeof(uint32_t)))
+    for (i = 0; i < words; i += step_words)
     {
         uint32_t expected = 0x12340000u | (uint32_t)i;
         uint32_t got = p[i];
         if (got != expected)
         {
-            printk("SDRAM stride fail at 0x%08x: got=0x%08x exp=0x%08x\n",
-                   (unsigned int)(base_addr + i * 4u),
-                   (unsigned int)got,
-                   (unsigned int)expected);
             return -3;
         }
     }
@@ -120,109 +145,107 @@ static int sdram_stride_test(uint32_t base_addr, size_t bytes, size_t stride)
     return 0;
 }
 
-int mytest_sdram_basic(void)
+int mytest_perform(uint32_t image_base)
 {
+    uint32_t fail_mask = 0u;
     uint32_t test_addr = MYTEST_SDRAM_BASE + MYTEST_SDRAM_TEST_OFFSET;
+    uint32_t msp;
+    uint32_t reset;
     int rc;
-
-    printk("mytest: SDRAM basic test at 0x%08x\n", (unsigned int)test_addr);
+    size_t i;
 
     rc = sdram_pattern_test(test_addr, MYTEST_SDRAM_TEST_WORDS);
     if (rc != 0)
     {
-        printk("mytest: sdram_pattern_test rc=%d\n", rc);
-        return rc;
+        fail_mask |= MYTEST_FAIL_SDRAM_PATTERN;
     }
 
     rc = sdram_stride_test(test_addr, 4096u, 64u);
     if (rc != 0)
     {
-        printk("mytest: sdram_stride_test rc=%d\n", rc);
-        return rc;
+        fail_mask |= MYTEST_FAIL_SDRAM_STRIDE;
     }
 
-    printk("mytest: SDRAM basic test PASS\n");
-    return 0;
-}
-
-int mytest_check_vector_table(uint32_t image_base)
-{
-    uint32_t msp = *(volatile uint32_t *)(image_base + 0u);
-    uint32_t reset = *(volatile uint32_t *)(image_base + 4u);
-
-    printk("mytest: image_base=0x%08x MSP=0x%08x RESET=0x%08x\n",
-           (unsigned int)image_base,
-           (unsigned int)msp,
-           (unsigned int)reset);
+    msp = *(volatile uint32_t *)(image_base + 0u);
+    reset = *(volatile uint32_t *)(image_base + 4u);
 
     if (!addr_in_range(msp, MYTEST_VALID_RAM_START, MYTEST_VALID_RAM_END))
     {
-        printk("mytest: MSP out of expected RAM range\n");
-        return -10;
+        fail_mask |= MYTEST_FAIL_VECTOR_MSP_RANGE;
     }
 
     if ((reset & 1u) == 0u)
     {
-        printk("mytest: RESET handler is not Thumb address\n");
-        return -11;
+        fail_mask |= MYTEST_FAIL_VECTOR_RESET_THUMB;
     }
 
     if (!addr_in_range(reset & ~1u, MYTEST_VALID_RAM_START, MYTEST_VALID_RAM_END))
     {
-        printk("mytest: RESET handler out of expected RAM range\n");
-        return -12;
+        fail_mask |= MYTEST_FAIL_VECTOR_RESET_RANGE;
     }
 
-    printk("mytest: vector table looks sane\n");
-    return 0;
-}
-
-/*
- * Optional very small execute test.
- * WARNING:
- * - enable only if you know the SDRAM region is executable
- * - this test writes 2 Thumb instructions into test area and jumps there
- */
-typedef uint32_t (*mytest_exec_fn_t)(void);
-
-int mytest_exec_from_sdram(void)
-{
-    uint32_t test_addr = MYTEST_SDRAM_BASE + MYTEST_SDRAM_TEST_OFFSET + 0x1000u;
-    volatile uint16_t *code16 = (volatile uint16_t *)test_addr;
-    volatile uint32_t *literal = (volatile uint32_t *)(test_addr + 4u);
-    mytest_exec_fn_t fn;
-    uint32_t ret;
-
-    /*
-     * Thumb code:
-     *  ldr r0, [pc, #0]
-     *  bx  lr
-     *  .word 0xCAFEBABE
-     */
-    code16[0] = 0x4800u; /* ldr r0, [pc, #0] */
-    code16[1] = 0x4770u; /* bx lr */
-    *literal = 0xCAFEBABEu;
-
-    __DSB();
-    __ISB();
-
-    fn = (mytest_exec_fn_t)(test_addr | 1u);
-    ret = fn();
-
-    printk("mytest: exec from SDRAM returned 0x%08x\n", (unsigned int)ret);
-
-    if (ret != 0xCAFEBABEu)
+#if defined(MYTEST_ENABLE_EXEC_TEST) && (MYTEST_ENABLE_EXEC_TEST != 0)
     {
-        printk("mytest: execute-from-SDRAM FAIL\n");
-        return -20;
+        uint32_t exec_addr = MYTEST_SDRAM_BASE + MYTEST_SDRAM_TEST_OFFSET + 0x1000u;
+        volatile uint16_t *code16 = (volatile uint16_t *)exec_addr;
+        volatile uint32_t *literal = (volatile uint32_t *)(exec_addr + 4u);
+        mytest_exec_fn_t fn;
+        uint32_t ret;
+
+        /*
+         * Thumb code:
+         *  ldr r0, [pc, #0]
+         *  bx  lr
+         *  .word 0xCAFEBABE
+         */
+        code16[0] = 0x4800u;
+        code16[1] = 0x4770u;
+        *literal = 0xCAFEBABEu;
+
+        __DSB();
+        __ISB();
+
+        fn = (mytest_exec_fn_t)(exec_addr | 1u);
+        ret = fn();
+
+        if (ret != 0xCAFEBABEu)
+        {
+            fail_mask |= MYTEST_FAIL_EXEC_FROM_SDRAM;
+        }
+    }
+#endif
+
+    for (i = 0; i < ARRAY_SIZE(g_mytest_fail_desc); ++i)
+    {
+        if ((fail_mask & g_mytest_fail_desc[i].bit) != 0u)
+        {
+            printk("E: - %s : fail\n", g_mytest_fail_desc[i].name);
+        }
+        else
+        {
+            printk("I: - %s : ok\n", g_mytest_fail_desc[i].name);
+        }
     }
 
-    printk("mytest: execute-from-SDRAM PASS\n");
-    return 0;
+    if (fail_mask == 0u)
+    {
+        return 0;
+    }
+
+    return -(int)fail_mask;
 }
 
-void mytest_show_clocks(void)
+void mytest_show_config_and_clocks(void)
 {
+    printk("=== SEMC SDRAM Controller Registers ===\n");
+    printk("MCR      = 0x%08x\n", SEMC->MCR);
+    printk("IOCR     = 0x%08x\n", SEMC->IOCR);
+    printk("BR0      = 0x%08x\n", SEMC->BR[0]);
+    printk("SDRAMCR0 = 0x%08x\n", SEMC->SDRAMCR0);
+    printk("SDRAMCR1 = 0x%08x\n", SEMC->SDRAMCR1);
+    printk("SDRAMCR2 = 0x%08x\n", SEMC->SDRAMCR2);
+    printk("SDRAMCR3 = 0x%08x\n", SEMC->SDRAMCR3);
+
     printk("=== Clock Frequencies (i.MX RT1062) ===\n");
     printk("kCLOCK_CpuClk          : %u Hz\n", CLOCK_GetFreq(kCLOCK_CpuClk));
     printk("kCLOCK_AhbClk          : %u Hz\n", CLOCK_GetFreq(kCLOCK_AhbClk));

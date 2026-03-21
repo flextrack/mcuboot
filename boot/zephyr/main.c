@@ -695,17 +695,23 @@ int main(void)
 #if defined(MCUBOOT_DIRECT_XIP)
     BOOT_LOG_INF("Jumping to the image slot");
 #else
-    BOOT_LOG_INF("Jumping to the first image slot");
+    BOOT_LOG_INF("Bootable image found.");
 #endif
 
-    mcuboot_status_change(MCUBOOT_STATUS_BOOTABLE_IMAGE_FOUND);
-
-    mytest_show_clocks();
-    mytest_check_vector_table(rsp.br_hdr->ih_load_addr + rsp.br_hdr->ih_hdr_size);
-
     MCUBOOT_WATCHDOG_FEED();
-    ZEPHYR_BOOT_LOG_STOP();
-    do_boot(&rsp);
+
+    BOOT_LOG_INF("Preboot testing...");
+    if (mytest_perform(rsp.br_hdr->ih_load_addr + rsp.br_hdr->ih_hdr_size) == 0)
+    {
+        mcuboot_status_change(MCUBOOT_STATUS_BOOTABLE_IMAGE_FOUND);
+        MCUBOOT_WATCHDOG_FEED();
+        ZEPHYR_BOOT_LOG_STOP();
+        do_boot(&rsp);
+    }
+    else
+    {
+        BOOT_LOG_ERR("Tests failed :(");
+    }
 
     mcuboot_status_change(MCUBOOT_STATUS_BOOT_FAILED);
 

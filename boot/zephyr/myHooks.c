@@ -247,17 +247,6 @@ void mcuboot_status_change(mcuboot_status_type_t status)
 	case MCUBOOT_STATUS_STARTUP:
 		LOG_INF("Compiled at %s %s", __DATE__, __TIME__);
 
-		printk("MCR      = 0x%08x\n", SEMC->MCR);
-		printk("IOCR     = 0x%08x\n", SEMC->IOCR);
-		printk("BR0      = 0x%08x\n", SEMC->BR[0]);
-		printk("SDRAMCR0 = 0x%08x\n", SEMC->SDRAMCR0);
-		printk("SDRAMCR1 = 0x%08x\n", SEMC->SDRAMCR1);
-		printk("SDRAMCR2 = 0x%08x\n", SEMC->SDRAMCR2);
-		printk("SDRAMCR3 = 0x%08x\n", SEMC->SDRAMCR3);
-
-		mytest_exec_from_sdram();
-		mytest_sdram_basic();
-
 		// Setup FAT filesystem for USB MSC if corrupted or not set yet
 		if (myFat_setupUsbMscDisk() != 0)
 		{
@@ -316,12 +305,13 @@ void mcuboot_status_change(mcuboot_status_type_t status)
 
 	case MCUBOOT_STATUS_BOOTABLE_IMAGE_FOUND:
 		MCUBOOT_WATCHDOG_FEED();
-		LOG_INF("Bootable image found, booting...");
+		LOG_INF("Booting image...");
 		break;
 
 	case MCUBOOT_STATUS_NO_BOOTABLE_IMAGE_FOUND:
 	case MCUBOOT_STATUS_BOOT_FAILED:
 		LOG_ERR("%s", (status == MCUBOOT_STATUS_BOOT_FAILED) ? "Boot failed! ;(" : "No bootable image ;(");
+		mytest_show_config_and_clocks();
 		break;
 
 	default:
