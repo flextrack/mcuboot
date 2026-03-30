@@ -123,26 +123,24 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
 
     struct fs_file_t fs_file_image;
     fs_file_t_init(&fs_file_image);
-    rc = fs_open(&fs_file_image, full_filename, FS_O_READ);
-    if (rc < 0)
+    int ret = fs_stat(full_filename, &entry);
+    if (ret == 0)
     {
-        // BOOT_LOG_INF("No new firmware image file \"%s\" on FAT partition", FIRMWARE_IMAGE_FILENAME);
-        fs_unmount(&mnt);
-        return -1;
-    }
-    else
-    {
-
-        rc = fs_stat(full_filename, &entry);
+        char size_buf[16];
+        fmt_kb_mb(size_buf, sizeof(size_buf), entry.size);
+        BOOT_LOG_WRN("New firmware image file \"%s\" found! (%s)", FIRMWARE_IMAGE_FILENAME, size_buf);
+        rc = fs_open(&fs_file_image, full_filename, FS_O_READ);
         if (rc < 0)
         {
-            // BOOT_LOG_ERR("fs_stat failed (%d)", rc);
+            BOOT_LOG_ERR("Failed to open firmware image file \"%s\" for reading", full_filename);
             fs_unmount(&mnt);
             return -1;
         }
-        char size_buf[16];
-        fmt_kb_mb(size_buf, sizeof(size_buf), entry.size);
-        BOOT_LOG_INF("New firmware image file \"%s\" found! (%s)", FIRMWARE_IMAGE_FILENAME, size_buf);
+    }
+    else
+    {
+        fs_unmount(&mnt);
+        return -1;
     }
 
     int written = 0;

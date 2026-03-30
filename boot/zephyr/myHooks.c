@@ -132,23 +132,23 @@ int load_slot_bootinfo(int slot, struct boot_rsp *rsp)
 
 void pring_big_info(int slot)
 {
-	static const char *big_zero_string = "\n"
-										 "   ###  \n"
-										 "  #   # \n"
-										 " #     #\n"
-										 " #     #\n"
-										 " #     #\n"
-										 "  #   # \n"
-										 "   ###  \n";
+	static const char *big_zero_string = "\r\n"
+										 "   ###  \r\n"
+										 "  #   # \r\n"
+										 " #     #\r\n"
+										 " #     #\r\n"
+										 " #     #\r\n"
+										 "  #   # \r\n"
+										 "   ###  \r\n";
 
-	static const char *big_one_string = "\n"
-										"   #  \n"
-										"  ##  \n"
-										" # #  \n"
-										"   #  \n"
-										"   #  \n"
-										"   #  \n"
-										" #####\n";
+	static const char *big_one_string = "\r\n"
+										"   #  \r\n"
+										"  ##  \r\n"
+										" # #  \r\n"
+										"   #  \r\n"
+										"   #  \r\n"
+										"   #  \r\n"
+										" #####\r\n";
 
 	if (slot == 0)
 	{
@@ -247,17 +247,23 @@ void mcuboot_status_change(mcuboot_status_type_t status)
 	case MCUBOOT_STATUS_STARTUP:
 		LOG_INF("Compiled at %s %s", __DATE__, __TIME__);
 
+		MCUBOOT_WATCHDOG_FEED();
+
 		// Setup FAT filesystem for USB MSC if corrupted or not set yet
 		if (myFat_setupUsbMscDisk() != 0)
 		{
 			BOOT_LOG_ERR("Failed to setup USB MSC disk");
 		}
 
+		MCUBOOT_WATCHDOG_FEED();
+
 		// Initialize USB MSC
 		if (myUsbMsc_init(&usb_ctx, usb_msg_cb) != 0)
 		{
 			BOOT_LOG_ERR("Failed to initialize USB MSC");
 		}
+
+		MCUBOOT_WATCHDOG_FEED();
 
 		// Enable USB MSC
 		if (myUsbMsc_enable(usb_ctx) != 0)
@@ -278,12 +284,12 @@ void mcuboot_status_change(mcuboot_status_type_t status)
 			else if (once)
 			{
 				once = false;
-				LOG_INF("Flashing mode entered... ");
-				LOG_INF("Please upload fw.bin file to the USB mass-storage drive.");
-				LOG_WRN("Disconnect USB cable and reboot device to continue.");
+				LOG_WRN("Flashing mode entered... ");
+				LOG_INF("Put fw.bin file to the PARROT drive, after disconnect USB cable.");
 			}
 		} while (myUsbMsc_isVbusDetected() || (timeout > 0));
 
+		MCUBOOT_WATCHDOG_FEED();
 		k_msleep(100);
 
 		// Disable USB MSC
@@ -291,6 +297,8 @@ void mcuboot_status_change(mcuboot_status_type_t status)
 		{
 			BOOT_LOG_ERR("Failed to disable USB MSC");
 		}
+
+		MCUBOOT_WATCHDOG_FEED();
 
 		if (myUsbMsc_shutdown(usb_ctx) != 0)
 		{
