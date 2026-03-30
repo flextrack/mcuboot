@@ -241,6 +241,8 @@ void mytest_show_config_and_clocks(void)
     printk("MCR      = 0x%08x\n", SEMC->MCR);
     printk("IOCR     = 0x%08x\n", SEMC->IOCR);
     printk("BR0      = 0x%08x\n", SEMC->BR[0]);
+    printk("BMCR0    = 0x%08x\n", SEMC->BMCR0);
+    printk("BMCR1    = 0x%08x\n", SEMC->BMCR1);
     printk("SDRAMCR0 = 0x%08x\n", SEMC->SDRAMCR0);
     printk("SDRAMCR1 = 0x%08x\n", SEMC->SDRAMCR1);
     printk("SDRAMCR2 = 0x%08x\n", SEMC->SDRAMCR2);
