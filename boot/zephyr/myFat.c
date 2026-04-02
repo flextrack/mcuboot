@@ -1,11 +1,14 @@
+#include <string.h>
+
 #include <zephyr/fs/fs.h>
-#include <zephyr/dfu/flash_img.h>
+#include <zephyr/storage/flash_map.h>
 #include <ff.h>
 
 #include "myFoilLeds.h"
 
 #include "bootutil/bootutil_log.h"
 #include "bootutil/image.h"
+#include "flash_map_backend/flash_map_backend.h"
 
 BOOT_LOG_MODULE_REGISTER(myFat);
 
@@ -24,7 +27,8 @@ static struct fs_mount_t mnt = {
 
 #define FILENAME_PATH_SIZE (128)
 char full_filename[FILENAME_PATH_SIZE];
-char firmware_buf[CONFIG_IMG_BLOCK_BUF_SIZE];
+static uint8_t firmware_buf[CONFIG_IMG_BLOCK_BUF_SIZE];
+static uint8_t flash_buf[CONFIG_IMG_BLOCK_BUF_SIZE];
 
 static inline void fmt_bytes(char *out, size_t out_sz, uint32_t bytes)
 {
@@ -93,10 +97,182 @@ static void log_progress_line(unsigned int written, unsigned int total)
     printk("\r%s", line);
 }
 
+static size_t myFat_min_size(size_t lhs, size_t rhs)
+{
+    return (lhs < rhs) ? lhs : rhs;
+}
+
+static int myFat_prepareChunk(struct fs_file_t *file,
+                              size_t image_size,
+                              off_t offset,
+                              uint8_t erased_val,
+                              uint8_t *buffer,
+                              size_t chunk_size,
+                              size_t *payload_size)
+{
+    size_t to_read = 0U;
+    int rc;
+    int read_len;
+
+    if ((file == NULL) || (buffer == NULL) || (payload_size == NULL))
+    {
+        return -EINVAL;
+    }
+
+    memset(buffer, erased_val, chunk_size);
+
+    if ((offset >= 0) && ((size_t)offset < image_size))
+    {
+        to_read = myFat_min_size(chunk_size, image_size - (size_t)offset);
+        rc = fs_seek(file, offset, FS_SEEK_SET);
+        if (rc < 0)
+        {
+            return rc;
+        }
+
+        read_len = fs_read(file, buffer, to_read);
+        if (read_len < 0)
+        {
+            return read_len;
+        }
+        if ((size_t)read_len != to_read)
+        {
+            return -EIO;
+        }
+    }
+
+    *payload_size = to_read;
+    return 0;
+}
+
+static int myFat_sectorMatchesImage(struct fs_file_t *file,
+                                    const struct flash_area *fa,
+                                    const struct flash_sector *sector,
+                                    size_t image_size,
+                                    uint8_t erased_val,
+                                    bool *matches)
+{
+    off_t offset;
+    off_t sector_end;
+    int rc;
+
+    if ((file == NULL) || (fa == NULL) || (sector == NULL) || (matches == NULL))
+    {
+        return -EINVAL;
+    }
+
+    *matches = false;
+    offset = sector->fs_off;
+    sector_end = sector->fs_off + (off_t)sector->fs_size;
+
+    while (offset < sector_end)
+    {
+        size_t chunk_size = myFat_min_size(sizeof(firmware_buf), (size_t)(sector_end - offset));
+        size_t payload_size;
+
+        rc = myFat_prepareChunk(file, image_size, offset, erased_val, firmware_buf, chunk_size, &payload_size);
+        if (rc != 0)
+        {
+            return rc;
+        }
+
+        rc = flash_area_read(fa, offset, flash_buf, chunk_size);
+        if (rc != 0)
+        {
+            return rc;
+        }
+
+        if (memcmp(firmware_buf, flash_buf, chunk_size) != 0)
+        {
+            return 0;
+        }
+
+        offset += (off_t)chunk_size;
+    }
+
+    *matches = true;
+    return 0;
+}
+
+static int myFat_programSector(struct fs_file_t *file,
+                               const struct flash_area *fa,
+                               const struct flash_sector *sector,
+                               size_t image_size,
+                               uint8_t erased_val,
+                               size_t *written_bytes)
+{
+    off_t offset;
+    off_t sector_end;
+    uint32_t align;
+    int rc;
+
+    if ((file == NULL) || (fa == NULL) || (sector == NULL) || (written_bytes == NULL))
+    {
+        return -EINVAL;
+    }
+
+    align = flash_area_align(fa);
+    if (align == 0U)
+    {
+        align = 1U;
+    }
+
+    if (flash_area_erase_required(fa))
+    {
+        rc = flash_area_erase(fa, sector->fs_off, sector->fs_size);
+        if (rc != 0)
+        {
+            return rc;
+        }
+    }
+
+    offset = sector->fs_off;
+    sector_end = sector->fs_off + (off_t)sector->fs_size;
+
+    while ((offset < sector_end) && ((size_t)offset < image_size))
+    {
+        size_t payload_size = myFat_min_size(sizeof(firmware_buf), image_size - (size_t)offset);
+        size_t sector_remaining = (size_t)(sector_end - offset);
+        size_t write_size;
+
+        payload_size = myFat_min_size(payload_size, sector_remaining);
+        write_size = payload_size;
+        if ((write_size % align) != 0U)
+        {
+            write_size += align - (write_size % align);
+        }
+
+        rc = myFat_prepareChunk(file, image_size, offset, erased_val, firmware_buf, write_size, &payload_size);
+        if (rc != 0)
+        {
+            return rc;
+        }
+
+        rc = flash_area_write(fa, offset, firmware_buf, write_size);
+        if (rc != 0)
+        {
+            return rc;
+        }
+
+        *written_bytes += payload_size;
+        offset += (off_t)payload_size;
+    }
+
+    return 0;
+}
+
 int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
 {
     int rc;
     struct fs_dirent entry;
+    const struct flash_area *upload_area = NULL;
+    uint8_t erased_val;
+    size_t processed = 0U;
+    size_t written = 0U;
+    size_t skipped = 0U;
+    unsigned int compared_sectors = 0U;
+    unsigned int written_sectors = 0U;
+    unsigned int skipped_sectors = 0U;
 
     memset(&fat_fs, 0, sizeof(fat_fs));
 
@@ -109,15 +285,15 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
         return -1;
     }
 
-    struct flash_img_context flash_img_ctx;
-
-    rc = flash_img_init_id(&flash_img_ctx, upload_slot);
+    rc = flash_area_open(upload_slot, &upload_area);
     if (rc != 0)
     {
-        BOOT_LOG_ERR("Image context init failure %u", upload_slot);
+        BOOT_LOG_ERR("Failed to open upload slot %u", upload_slot);
         fs_unmount(&mnt);
         return -1;
     }
+
+    erased_val = flash_area_erased_val(upload_area);
 
     snprintf(full_filename, FILENAME_PATH_SIZE, "%s/%s", mnt.mnt_point, FIRMWARE_IMAGE_FILENAME);
 
@@ -127,61 +303,93 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
     if (ret == 0)
     {
         char size_buf[16];
+
+        if (entry.size > upload_area->fa_size)
+        {
+            BOOT_LOG_ERR("Firmware image too large: %u > slot size %u",
+                         (unsigned int)entry.size,
+                         (unsigned int)upload_area->fa_size);
+            flash_area_close(upload_area);
+            fs_unmount(&mnt);
+            return -1;
+        }
+
         fmt_kb_mb(size_buf, sizeof(size_buf), entry.size);
         BOOT_LOG_WRN("New firmware image file \"%s\" found! (%s)", FIRMWARE_IMAGE_FILENAME, size_buf);
         rc = fs_open(&fs_file_image, full_filename, FS_O_READ);
         if (rc < 0)
         {
             BOOT_LOG_ERR("Failed to open firmware image file \"%s\" for reading", full_filename);
+            flash_area_close(upload_area);
             fs_unmount(&mnt);
             return -1;
         }
     }
     else
     {
+        flash_area_close(upload_area);
         fs_unmount(&mnt);
         return -1;
     }
 
-    int written = 0;
-
-    while (1)
+    while (processed < entry.size)
     {
-        int bytes_read = fs_read(&fs_file_image, firmware_buf, CONFIG_IMG_BLOCK_BUF_SIZE);
-        if (bytes_read > 0)
+        struct flash_sector sector;
+        bool matches;
+        size_t sector_image_end;
+
+        rc = flash_area_get_sector(upload_area, (off_t)processed, &sector);
+        if (rc != 0)
         {
-            bool flush_remainder = bytes_read != CONFIG_IMG_BLOCK_BUF_SIZE;
-            rc = flash_img_buffered_write(&flash_img_ctx, firmware_buf, bytes_read, flush_remainder);
-            if (rc == 0)
-            {
-                written += bytes_read;
+            BOOT_LOG_ERR("Failed to get flash sector at offset %u rc=%d", (unsigned int)processed, rc);
+            break;
+        }
 
-                log_progress_line(written, entry.size);
-                myFoilLeds_setState(LED_FOIL_TOGGLE_BOTH);
-                MCUBOOT_WATCHDOG_FEED();
+        rc = myFat_sectorMatchesImage(&fs_file_image, upload_area, &sector, entry.size, erased_val, &matches);
+        if (rc != 0)
+        {
+            BOOT_LOG_ERR("Failed to compare sector at offset %u rc=%d", (unsigned int)sector.fs_off, rc);
+            break;
+        }
 
-                if (flush_remainder)
-                {
-                    break;
-                }
-            }
-            else
+        compared_sectors++;
+
+        if (!matches)
+        {
+            rc = myFat_programSector(&fs_file_image, upload_area, &sector, entry.size, erased_val, &written);
+            if (rc != 0)
             {
-                BOOT_LOG_ERR("Failed to write data to slot %u", upload_slot);
+                BOOT_LOG_ERR("Failed to write changed sector at offset %u rc=%d",
+                             (unsigned int)sector.fs_off,
+                             rc);
                 break;
             }
+
+            written_sectors++;
         }
         else
         {
-            BOOT_LOG_ERR("Failed to read data from \"%s\"", FIRMWARE_IMAGE_FILENAME);
-            break;
+            sector_image_end = myFat_min_size((size_t)sector.fs_off + sector.fs_size, entry.size);
+            skipped += sector_image_end - (size_t)sector.fs_off;
+            skipped_sectors++;
         }
+
+        processed = myFat_min_size((size_t)sector.fs_off + sector.fs_size, entry.size);
+        log_progress_line((unsigned int)processed, entry.size);
+        myFoilLeds_setState(LED_FOIL_TOGGLE_BOTH);
+        MCUBOOT_WATCHDOG_FEED();
     }
     printk("\n");
 
     myFoilLeds_setState(LED_FOIL_OFF);
-    written = flash_img_bytes_written(&flash_img_ctx);
-    BOOT_LOG_INF("Written %d bytes", written);
+    BOOT_LOG_INF("Compared %u bytes, written %u bytes, skipped %u bytes",
+                 (unsigned int)processed,
+                 (unsigned int)written,
+                 (unsigned int)skipped);
+    BOOT_LOG_INF("Compared %u sectors, wrote %u sectors, skipped %u sectors",
+                 compared_sectors,
+                 written_sectors,
+                 skipped_sectors);
 
     fs_close(&fs_file_image);
 
@@ -196,8 +404,14 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
     }
 
     fs_unmount(&mnt);
+    flash_area_close(upload_area);
 
-    if (written < sizeof(struct image_header))
+    if (processed < entry.size)
+    {
+        return -1;
+    }
+
+    if (entry.size < sizeof(struct image_header))
     {
         BOOT_LOG_ERR("Invalid image: image size < image header!");
         return -1;

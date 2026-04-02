@@ -246,7 +246,7 @@ void mcuboot_status_change(mcuboot_status_type_t status)
 	{
 	case MCUBOOT_STATUS_STARTUP:
 		LOG_INF("Compiled at %s %s", __DATE__, __TIME__);
-		mytest_show_config_and_clocks();
+		// mytest_show_config_and_clocks();
 		MCUBOOT_WATCHDOG_FEED();
 
 		// Setup FAT filesystem for USB MSC if corrupted or not set yet
