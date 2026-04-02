@@ -285,7 +285,7 @@ void mcuboot_status_change(mcuboot_status_type_t status)
 			{
 				once = false;
 				LOG_WRN("Flashing mode entered... ");
-				LOG_INF("Put fw.bin file to the PARROT drive, after disconnect USB cable.");
+				LOG_INF("Put fw.bin file to the PARROT drive and disconnect USB cable afterwards.");
 			}
 		} while (myUsbMsc_isVbusDetected() || (timeout > 0));
 
