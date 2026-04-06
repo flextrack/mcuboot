@@ -145,12 +145,10 @@ static int sdram_stride_test(uint32_t base_addr, size_t bytes, size_t stride)
     return 0;
 }
 
-int mytest_perform(uint32_t image_base)
+int mytest_perform(void)
 {
     uint32_t fail_mask = 0u;
     uint32_t test_addr = MYTEST_SDRAM_BASE + MYTEST_SDRAM_TEST_OFFSET;
-    uint32_t msp;
-    uint32_t reset;
     int rc;
     size_t i;
 
@@ -164,24 +162,6 @@ int mytest_perform(uint32_t image_base)
     if (rc != 0)
     {
         fail_mask |= MYTEST_FAIL_SDRAM_STRIDE;
-    }
-
-    msp = *(volatile uint32_t *)(image_base + 0u);
-    reset = *(volatile uint32_t *)(image_base + 4u);
-
-    if (!addr_in_range(msp, MYTEST_VALID_RAM_START, MYTEST_VALID_RAM_END))
-    {
-        fail_mask |= MYTEST_FAIL_VECTOR_MSP_RANGE;
-    }
-
-    if ((reset & 1u) == 0u)
-    {
-        fail_mask |= MYTEST_FAIL_VECTOR_RESET_THUMB;
-    }
-
-    if (!addr_in_range(reset & ~1u, MYTEST_VALID_RAM_START, MYTEST_VALID_RAM_END))
-    {
-        fail_mask |= MYTEST_FAIL_VECTOR_RESET_RANGE;
     }
 
 #if defined(MYTEST_ENABLE_EXEC_TEST) && (MYTEST_ENABLE_EXEC_TEST != 0)
@@ -226,6 +206,45 @@ int mytest_perform(uint32_t image_base)
             printk("I: - %s : ok\n", g_mytest_fail_desc[i].name);
         }
     }
+
+    if (fail_mask == 0u)
+    {
+        return 0;
+    }
+
+    return -(int)fail_mask;
+}
+
+int mytest_validate_loaded_image(uint32_t image_base)
+{
+    uint32_t fail_mask = 0u;
+    uint32_t msp;
+    uint32_t reset;
+
+    msp = *(volatile uint32_t *)(image_base + 0u);
+    reset = *(volatile uint32_t *)(image_base + 4u);
+
+    if (!addr_in_range(msp, MYTEST_VALID_RAM_START, MYTEST_VALID_RAM_END))
+    {
+        fail_mask |= MYTEST_FAIL_VECTOR_MSP_RANGE;
+    }
+
+    if ((reset & 1u) == 0u)
+    {
+        fail_mask |= MYTEST_FAIL_VECTOR_RESET_THUMB;
+    }
+
+    if (!addr_in_range(reset & ~1u, MYTEST_VALID_RAM_START, MYTEST_VALID_RAM_END))
+    {
+        fail_mask |= MYTEST_FAIL_VECTOR_RESET_RANGE;
+    }
+
+    printk((fail_mask & MYTEST_FAIL_VECTOR_MSP_RANGE) ? "E: - vector msp range : fail\n"
+                                                      : "I: - vector msp range : ok\n");
+    printk((fail_mask & MYTEST_FAIL_VECTOR_RESET_THUMB) ? "E: - vector reset thumb : fail\n"
+                                                        : "I: - vector reset thumb : ok\n");
+    printk((fail_mask & MYTEST_FAIL_VECTOR_RESET_RANGE) ? "E: - vector reset range : fail\n"
+                                                        : "I: - vector reset range : ok\n");
 
     if (fail_mask == 0u)
     {

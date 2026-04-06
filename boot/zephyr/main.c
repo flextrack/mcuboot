@@ -531,6 +531,14 @@ int main(void)
 
     ZEPHYR_BOOT_LOG_START();
 
+    BOOT_LOG_INF("Pre-RAM-load SDRAM testing...");
+    if (mytest_perform() != 0)
+    {
+        BOOT_LOG_ERR("Pre-RAM-load SDRAM tests failed");
+        mcuboot_status_change(MCUBOOT_STATUS_BOOT_FAILED);
+        FIH_PANIC;
+    }
+
     (void)rc;
 
     mcuboot_status_change(MCUBOOT_STATUS_STARTUP);
@@ -701,7 +709,7 @@ int main(void)
     MCUBOOT_WATCHDOG_FEED();
 
     BOOT_LOG_INF("Preboot testing...");
-    if (mytest_perform(rsp.br_hdr->ih_load_addr + rsp.br_hdr->ih_hdr_size) == 0)
+    if (mytest_validate_loaded_image(rsp.br_hdr->ih_load_addr + rsp.br_hdr->ih_hdr_size) == 0)
     {
         mcuboot_status_change(MCUBOOT_STATUS_BOOTABLE_IMAGE_FOUND);
         MCUBOOT_WATCHDOG_FEED();
