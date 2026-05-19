@@ -1,6 +1,7 @@
 #include <string.h>
 
 #include <zephyr/fs/fs.h>
+#include <zephyr/storage/disk_access.h>
 #include <zephyr/storage/flash_map.h>
 #include <ff.h>
 
@@ -13,8 +14,10 @@
 BOOT_LOG_MODULE_REGISTER(myFat);
 
 #define DISK_LABEL "PARROT"
+#define DISK_ACCESS_NAME "NOR"
 
 #define FIRMWARE_IMAGE_FILENAME "fw.bin"
+#define MKFS_TRIGGER_FILENAME "mkfs.now"
 
 static BYTE work[FF_MAX_SS];
 
@@ -29,6 +32,98 @@ static struct fs_mount_t mnt = {
 char full_filename[FILENAME_PATH_SIZE];
 static uint8_t firmware_buf[CONFIG_IMG_BLOCK_BUF_SIZE];
 static uint8_t flash_buf[CONFIG_IMG_BLOCK_BUF_SIZE];
+
+static bool fat_file_read_error_detected;
+
+static const char *myFat_typeName(BYTE type)
+{
+    switch (type)
+    {
+    case FS_FAT12:
+        return "FAT12";
+    case FS_FAT16:
+        return "FAT16";
+    case FS_FAT32:
+        return "FAT32";
+    case FS_EXFAT:
+        return "exFAT";
+    default:
+        return "unknown";
+    }
+}
+
+static void myFat_logFilesystemGeometry(void)
+{
+    BOOT_LOG_INF("FAT %s: sector=%u, cluster=%u sectors (%u bytes), entries=%u",
+                 myFat_typeName(fat_fs.fs_type),
+                 (unsigned int)fat_fs.ssize,
+                 (unsigned int)fat_fs.csize,
+                 (unsigned int)(fat_fs.csize * fat_fs.ssize),
+                 (unsigned int)fat_fs.n_fatent);
+}
+
+static int myFat_syncDiskCache(void)
+{
+    int rc;
+
+    rc = disk_access_ioctl(DISK_ACCESS_NAME, DISK_IOCTL_CTRL_SYNC, NULL);
+    if (rc != 0)
+    {
+        BOOT_LOG_ERR("Failed to sync FAT disk cache (%d)", rc);
+        return rc;
+    }
+
+    return 0;
+}
+
+static void myFat_noteFileReadError(void)
+{
+    fat_file_read_error_detected = true;
+}
+
+static int myFat_formatAndRemount(const char *reason)
+{
+    FRESULT fr;
+    int rc;
+
+    BOOT_LOG_WRN("Formatting FAT filesystem: %s", reason);
+    (void)fs_unmount(&mnt);
+    memset(&fat_fs, 0, sizeof(fat_fs));
+
+    fr = f_mkfs("/NOR", NULL, work, sizeof(work));
+    if (fr != FR_OK)
+    {
+        BOOT_LOG_ERR("Failed to create new FAT filesystem (%d)", fr);
+        return -1;
+    }
+
+    BOOT_LOG_INF("FAT filesystem formatted");
+    rc = fs_mount(&mnt);
+    if (rc == 0)
+    {
+        myFat_logFilesystemGeometry();
+    }
+    else
+    {
+        BOOT_LOG_ERR("Failed to mount newly formatted filesystem (%d)", rc);
+        return -1;
+    }
+
+    return 0;
+}
+
+static int myFat_formatAfterFileReadError(void)
+{
+    int rc;
+
+    rc = myFat_formatAndRemount("firmware file read error");
+    if (rc == 0)
+    {
+        fs_unmount(&mnt);
+    }
+
+    return rc;
+}
 
 static inline void fmt_bytes(char *out, size_t out_sz, uint32_t bytes)
 {
@@ -127,16 +222,19 @@ static int myFat_prepareChunk(struct fs_file_t *file,
         rc = fs_seek(file, offset, FS_SEEK_SET);
         if (rc < 0)
         {
+            myFat_noteFileReadError();
             return rc;
         }
 
         read_len = fs_read(file, buffer, to_read);
         if (read_len < 0)
         {
+            myFat_noteFileReadError();
             return read_len;
         }
         if ((size_t)read_len != to_read)
         {
+            myFat_noteFileReadError();
             return -EIO;
         }
     }
@@ -274,9 +372,17 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
     unsigned int written_sectors = 0U;
     unsigned int skipped_sectors = 0U;
 
-    memset(&fat_fs, 0, sizeof(fat_fs));
+    fat_file_read_error_detected = false;
 
     // BOOT_LOG_INF("Checking if new firmware image is waiting in FAT partition");
+
+    memset(&fat_fs, 0, sizeof(fat_fs));
+
+    rc = myFat_syncDiskCache();
+    if (rc != 0)
+    {
+        return -1;
+    }
 
     rc = fs_mount(&mnt);
     if (rc < 0)
@@ -349,6 +455,11 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
         if (rc != 0)
         {
             BOOT_LOG_ERR("Failed to compare sector at offset %u rc=%d", (unsigned int)sector.fs_off, rc);
+            if (fat_file_read_error_detected)
+            {
+                BOOT_LOG_ERR("FAT file read error detected while comparing firmware image");
+                goto file_read_error;
+            }
             break;
         }
 
@@ -362,6 +473,11 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
                 BOOT_LOG_ERR("Failed to write changed sector at offset %u rc=%d",
                              (unsigned int)sector.fs_off,
                              rc);
+                if (fat_file_read_error_detected)
+                {
+                    BOOT_LOG_ERR("FAT file read error detected while programming firmware image");
+                    goto file_read_error;
+                }
                 break;
             }
 
@@ -393,6 +509,20 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
 
     fs_close(&fs_file_image);
 
+    if (processed < entry.size)
+    {
+        fs_unmount(&mnt);
+        flash_area_close(upload_area);
+        return -1;
+    }
+
+    if (fat_file_read_error_detected)
+    {
+        (void)myFat_formatAfterFileReadError();
+        flash_area_close(upload_area);
+        return -1;
+    }
+
     rc = fs_unlink(full_filename);
     if (rc < 0)
     {
@@ -406,11 +536,6 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
     fs_unmount(&mnt);
     flash_area_close(upload_area);
 
-    if (processed < entry.size)
-    {
-        return -1;
-    }
-
     if (entry.size < sizeof(struct image_header))
     {
         BOOT_LOG_ERR("Invalid image: image size < image header!");
@@ -418,11 +543,20 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
     }
 
     return 0;
+
+file_read_error:
+    printk("\n");
+    myFoilLeds_setState(LED_FOIL_OFF);
+    fs_close(&fs_file_image);
+    (void)myFat_formatAfterFileReadError();
+    flash_area_close(upload_area);
+    return -1;
 }
 
 int myFat_setupUsbMscDisk(void)
 {
     int rc;
+    struct fs_dirent entry;
     char label[35];
 
     memset(&fat_fs, 0, sizeof(fat_fs));
@@ -431,25 +565,31 @@ int myFat_setupUsbMscDisk(void)
     if (rc < 0)
     {
         BOOT_LOG_WRN("Failed to mount, creating new FAT filesystem");
-        rc = f_mkfs("/NOR", NULL, work, sizeof(work));
-        if (rc < 0)
+        rc = myFat_formatAndRemount("mount failed while setting up USB MSC disk");
+        if (rc != 0)
         {
-            BOOT_LOG_ERR("Failed to create new FAT filesystem!");
             return -1;
         }
-        else
+    }
+    else
+    {
+        myFat_logFilesystemGeometry();
+    }
+
+    snprintf(full_filename, FILENAME_PATH_SIZE, "%s/%s", mnt.mnt_point, MKFS_TRIGGER_FILENAME);
+    rc = fs_stat(full_filename, &entry);
+    if (rc == 0)
+    {
+        BOOT_LOG_WRN("Format trigger file \"%s\" found", MKFS_TRIGGER_FILENAME);
+        rc = myFat_formatAndRemount("format trigger file found");
+        if (rc != 0)
         {
-            rc = fs_mount(&mnt);
-            if (rc == 0)
-            {
-                BOOT_LOG_INF("New filesystem is mountable");
-            }
-            else
-            {
-                BOOT_LOG_ERR("Failed to mount newly created filesystem!");
-                return -1;
-            }
+            return -1;
         }
+    }
+    else if (rc != -ENOENT)
+    {
+        BOOT_LOG_ERR("Failed to stat format trigger file \"%s\" (%d)", full_filename, rc);
     }
 
     rc = f_getlabel("", label, NULL);
