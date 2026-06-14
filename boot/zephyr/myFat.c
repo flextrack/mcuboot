@@ -414,87 +414,6 @@ static int myFat_writeAligned(const struct flash_area *fa,
     return 0;
 }
 
-static int myFat_flashMatchesAligned(const struct flash_area *fa,
-                                     off_t offset,
-                                     const uint8_t *buffer,
-                                     size_t size,
-                                     uint8_t erased_val,
-                                     bool *matches)
-{
-    uint32_t align = flash_area_align(fa);
-    size_t checked = 0U;
-
-    if (matches == NULL)
-    {
-        return -EINVAL;
-    }
-
-    *matches = false;
-
-    if (align == 0U)
-    {
-        align = 1U;
-    }
-
-    if ((offset < 0) || ((size_t)offset > fa->fa_size) || (size > (fa->fa_size - (size_t)offset)))
-    {
-        BOOT_LOG_ERR("Refusing flash compare outside slot: off=%u size=%u slot=%u",
-                     (unsigned int)offset,
-                     (unsigned int)size,
-                     (unsigned int)fa->fa_size);
-        return -EINVAL;
-    }
-
-    if ((sizeof(firmware_buf) % align) != 0U)
-    {
-        BOOT_LOG_ERR("Firmware scratch buffer is not aligned to flash write size");
-        return -EINVAL;
-    }
-
-    while (checked < size)
-    {
-        size_t payload_size = myFat_min_size(sizeof(firmware_buf), size - checked);
-        size_t compare_size = payload_size;
-        int rc;
-
-        if ((compare_size % align) != 0U)
-        {
-            compare_size += align - (compare_size % align);
-        }
-
-        if (compare_size > sizeof(firmware_buf))
-        {
-            return -EINVAL;
-        }
-
-        if (((size_t)offset + checked + compare_size) > fa->fa_size)
-        {
-            BOOT_LOG_ERR("Refusing aligned flash compare outside slot");
-            return -EINVAL;
-        }
-
-        memset(firmware_buf, erased_val, compare_size);
-        memcpy(firmware_buf, buffer + checked, payload_size);
-
-        rc = flash_area_read(fa, offset + (off_t)checked, flash_buf, compare_size);
-        if (rc != 0)
-        {
-            return rc;
-        }
-
-        if (memcmp(firmware_buf, flash_buf, compare_size) != 0)
-        {
-            return 0;
-        }
-
-        MCUBOOT_WATCHDOG_FEED();
-        checked += payload_size;
-    }
-
-    *matches = true;
-    return 0;
-}
-
 static int myFat_ensureErasedForWrite(const struct flash_area *fa,
                                       off_t offset,
                                       size_t size,
@@ -586,7 +505,6 @@ static int myFat_installLz4Package(struct fs_file_t *file,
     size_t file_offset = EMD_LZ4_HEADER_SIZE;
     size_t written = 0U;
     size_t programmed = 0U;
-    size_t skipped = 0U;
     size_t erased_until = 0U;
     int rc;
 
@@ -630,7 +548,6 @@ static int myFat_installLz4Package(struct fs_file_t *file,
         uint8_t size_buf[4];
         uint32_t compressed_size;
         uint32_t expected_size;
-        bool matches;
         int decoded_size;
 
         rc = myFat_readExact(file, size_buf, sizeof(size_buf));
@@ -683,31 +600,6 @@ static int myFat_installLz4Package(struct fs_file_t *file,
             return -EINVAL;
         }
 
-        rc = myFat_flashMatchesAligned(upload_area,
-                                       (off_t)written,
-                                       lz4_decompressed_buf,
-                                       expected_size,
-                                       erased_val,
-                                       &matches);
-        if (rc != 0)
-        {
-            BOOT_LOG_ERR("Failed to compare decompressed chunk %u at offset %u (%d)",
-                         chunk_index,
-                         (unsigned int)written,
-                         rc);
-            return rc;
-        }
-
-        if (matches)
-        {
-            skipped += expected_size;
-            written += expected_size;
-            log_progress_line((unsigned int)written, original_size);
-            myFoilLeds_setState(LED_FOIL_TOGGLE_BOTH);
-            MCUBOOT_WATCHDOG_FEED();
-            continue;
-        }
-
         rc = myFat_ensureErasedForWrite(upload_area,
                                         (off_t)written,
                                         expected_size,
@@ -746,10 +638,9 @@ static int myFat_installLz4Package(struct fs_file_t *file,
         return -EINVAL;
     }
 
-    BOOT_LOG_INF("Decompressed %u bytes from LZ4 package, wrote %u bytes, skipped %u bytes",
+    BOOT_LOG_INF("Decompressed %u bytes from LZ4 package, wrote %u bytes",
                  (unsigned int)written,
-                 (unsigned int)programmed,
-                 (unsigned int)skipped);
+                 (unsigned int)programmed);
     return myFat_validateInstalledHeader(upload_area, original_size);
 }
 
