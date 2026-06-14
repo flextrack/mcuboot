@@ -44,6 +44,7 @@ static uint8_t lz4_compressed_buf[EMD_LZ4_MAX_COMPRESSED_CHUNK_SIZE];
 static uint8_t lz4_decompressed_buf[EMD_LZ4_MAX_CHUNK_SIZE];
 
 static bool fat_file_read_error_detected;
+static const char *firmware_install_fail_reason;
 
 static const char *myFat_typeName(BYTE type)
 {
@@ -135,11 +136,12 @@ static int myFat_formatAfterFileReadError(void)
     return rc;
 }
 
-static void myFat_markFirmwareInstallFailed(void)
+static void myFat_markFirmwareInstallFailed(const char *reason, int error_code)
 {
     struct fs_file_t fail_file;
     char firmware_filename[FILENAME_PATH_SIZE];
     char fail_filename[FILENAME_PATH_SIZE];
+    char fail_text[128];
     int rc;
 
     snprintf(firmware_filename, sizeof(firmware_filename), "%s/%s", mnt.mnt_point, FIRMWARE_IMAGE_FILENAME);
@@ -165,6 +167,24 @@ static void myFat_markFirmwareInstallFailed(void)
         return;
     }
 
+    rc = snprintk(fail_text,
+                  sizeof(fail_text),
+                  "fw.bin install failed\nreason=%s\nrc=%d\n",
+                  reason,
+                  error_code);
+    if (rc < 0)
+    {
+        fail_text[0] = '\0';
+    }
+
+    if (fail_text[0] != '\0')
+    {
+        rc = fs_write(&fail_file, fail_text, strlen(fail_text));
+        if (rc < 0)
+        {
+            BOOT_LOG_ERR("Failed to write firmware failure marker \"%s\" (%d)", fail_filename, rc);
+        }
+    }
     (void)fs_close(&fail_file);
     (void)myFat_syncDiskCache();
     BOOT_LOG_WRN("Created firmware failure marker \"%s\"", fail_filename);
@@ -557,12 +577,14 @@ static int myFat_installLz4Package(struct fs_file_t *file,
         BOOT_LOG_ERR("Decompressed image too large: %u > slot size %u",
                      original_size,
                      (unsigned int)upload_area->fa_size);
+        firmware_install_fail_reason = "lz4 decompressed image too large for slot";
         return -EINVAL;
     }
 
     if ((chunk_size == 0U) || (chunk_size > EMD_LZ4_MAX_CHUNK_SIZE))
     {
         BOOT_LOG_ERR("Unsupported LZ4 chunk size: %u", chunk_size);
+        firmware_install_fail_reason = "lz4 unsupported chunk size";
         return -EINVAL;
     }
 
@@ -570,6 +592,7 @@ static int myFat_installLz4Package(struct fs_file_t *file,
     if ((chunk_count == 0U) || (chunk_count != expected_chunks))
     {
         BOOT_LOG_ERR("Invalid LZ4 chunk count: %u expected %u", chunk_count, expected_chunks);
+        firmware_install_fail_reason = "lz4 invalid chunk count";
         return -EINVAL;
     }
 
@@ -584,6 +607,7 @@ static int myFat_installLz4Package(struct fs_file_t *file,
     if (rc < 0)
     {
         myFat_noteFileReadError();
+        firmware_install_fail_reason = "lz4 package seek failed";
         return rc;
     }
 
@@ -597,6 +621,7 @@ static int myFat_installLz4Package(struct fs_file_t *file,
         rc = myFat_readExact(file, size_buf, sizeof(size_buf));
         if (rc != 0)
         {
+            firmware_install_fail_reason = "lz4 chunk size read failed";
             return rc;
         }
         file_offset += sizeof(size_buf);
@@ -605,18 +630,21 @@ static int myFat_installLz4Package(struct fs_file_t *file,
         if ((compressed_size == 0U) || (compressed_size > EMD_LZ4_MAX_COMPRESSED_CHUNK_SIZE))
         {
             BOOT_LOG_ERR("Invalid compressed chunk %u size: %u", chunk_index, compressed_size);
+            firmware_install_fail_reason = "lz4 invalid compressed chunk size";
             return -EINVAL;
         }
 
         if ((file_offset + compressed_size) > (size_t)entry->size)
         {
             BOOT_LOG_ERR("Compressed chunk %u exceeds package size", chunk_index);
+            firmware_install_fail_reason = "lz4 compressed chunk exceeds package size";
             return -EINVAL;
         }
 
         rc = myFat_readExact(file, lz4_compressed_buf, compressed_size);
         if (rc != 0)
         {
+            firmware_install_fail_reason = "lz4 compressed chunk read failed";
             return rc;
         }
         file_offset += compressed_size;
@@ -628,6 +656,7 @@ static int myFat_installLz4Package(struct fs_file_t *file,
                          (unsigned int)written,
                          expected_size,
                          (unsigned int)upload_area->fa_size);
+            firmware_install_fail_reason = "lz4 decompressed chunk outside slot";
             return -EINVAL;
         }
 
@@ -641,6 +670,7 @@ static int myFat_installLz4Package(struct fs_file_t *file,
                          chunk_index,
                          decoded_size,
                          expected_size);
+            firmware_install_fail_reason = "lz4 chunk decompression failed";
             return -EINVAL;
         }
 
@@ -650,6 +680,7 @@ static int myFat_installLz4Package(struct fs_file_t *file,
                                         &erased_until);
         if (rc != 0)
         {
+            firmware_install_fail_reason = "lz4 flash erase failed";
             return rc;
         }
 
@@ -664,6 +695,7 @@ static int myFat_installLz4Package(struct fs_file_t *file,
                          chunk_index,
                          (unsigned int)written,
                          rc);
+            firmware_install_fail_reason = "lz4 flash write failed";
             return rc;
         }
 
@@ -679,13 +711,20 @@ static int myFat_installLz4Package(struct fs_file_t *file,
     {
         BOOT_LOG_ERR("Unexpected trailing data in LZ4 package: %u bytes",
                      (unsigned int)((size_t)entry->size - file_offset));
+        firmware_install_fail_reason = "lz4 package has trailing data";
         return -EINVAL;
     }
 
     BOOT_LOG_INF("Decompressed %u bytes from LZ4 package, wrote %u bytes",
                  (unsigned int)written,
                  (unsigned int)programmed);
-    return myFat_validateInstalledHeader(upload_area, original_size);
+    rc = myFat_validateInstalledHeader(upload_area, original_size);
+    if (rc != 0)
+    {
+        firmware_install_fail_reason = "lz4 installed image header validation failed";
+    }
+
+    return rc;
 }
 
 static int myFat_prepareChunk(struct fs_file_t *file,
@@ -864,8 +903,11 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
     unsigned int compared_sectors = 0U;
     unsigned int written_sectors = 0U;
     unsigned int skipped_sectors = 0U;
+    const char *fail_reason = "unknown";
+    int fail_rc = 0;
 
     fat_file_read_error_detected = false;
+    firmware_install_fail_reason = NULL;
 
     // BOOT_LOG_INF("Checking if new firmware image is waiting in FAT partition");
 
@@ -927,7 +969,7 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
                 }
                 else
                 {
-                    myFat_markFirmwareInstallFailed();
+                    myFat_markFirmwareInstallFailed("firmware header read failed", rc);
                 }
                 flash_area_close(upload_area);
                 fs_unmount(&mnt);
@@ -940,7 +982,7 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
             {
                 BOOT_LOG_ERR("Failed to rewind firmware file (%d)", rc);
                 fs_close(&fs_file_image);
-                myFat_markFirmwareInstallFailed();
+                myFat_markFirmwareInstallFailed("firmware file rewind failed", rc);
                 flash_area_close(upload_area);
                 fs_unmount(&mnt);
                 return -1;
@@ -953,7 +995,7 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
                          (unsigned int)entry.size,
                          (unsigned int)upload_area->fa_size);
             fs_close(&fs_file_image);
-            myFat_markFirmwareInstallFailed();
+            myFat_markFirmwareInstallFailed("raw image too large for slot", -EFBIG);
             flash_area_close(upload_area);
             fs_unmount(&mnt);
             return -1;
@@ -980,7 +1022,10 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
             }
             else
             {
-                myFat_markFirmwareInstallFailed();
+                myFat_markFirmwareInstallFailed((firmware_install_fail_reason != NULL) ?
+                                                    firmware_install_fail_reason :
+                                                    "lz4 package install failed",
+                                                rc);
             }
             flash_area_close(upload_area);
             fs_unmount(&mnt);
@@ -1013,6 +1058,8 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
         if (rc != 0)
         {
             BOOT_LOG_ERR("Failed to get flash sector at offset %u rc=%d", (unsigned int)processed, rc);
+            fail_reason = "raw flash sector lookup failed";
+            fail_rc = rc;
             break;
         }
 
@@ -1025,6 +1072,8 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
                 BOOT_LOG_ERR("FAT file read error detected while comparing firmware image");
                 goto file_read_error;
             }
+            fail_reason = "raw sector compare failed";
+            fail_rc = rc;
             break;
         }
 
@@ -1043,6 +1092,8 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
                     BOOT_LOG_ERR("FAT file read error detected while programming firmware image");
                     goto file_read_error;
                 }
+                fail_reason = "raw flash write failed";
+                fail_rc = rc;
                 break;
             }
 
@@ -1082,7 +1133,7 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
         }
         else
         {
-            myFat_markFirmwareInstallFailed();
+            myFat_markFirmwareInstallFailed(fail_reason, fail_rc);
         }
         fs_unmount(&mnt);
         flash_area_close(upload_area);
@@ -1099,7 +1150,7 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
     rc = myFat_validateInstalledHeader(upload_area, entry.size);
     if (rc != 0)
     {
-        myFat_markFirmwareInstallFailed();
+        myFat_markFirmwareInstallFailed("installed image header validation failed", rc);
         fs_unmount(&mnt);
         flash_area_close(upload_area);
         return -1;
