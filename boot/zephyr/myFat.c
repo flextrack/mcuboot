@@ -3,6 +3,7 @@
 #include <zephyr/fs/fs.h>
 #include <zephyr/storage/disk_access.h>
 #include <zephyr/storage/flash_map.h>
+#include <zephyr/sys/byteorder.h>
 #include <ff.h>
 
 #include "myFoilLeds.h"
@@ -19,6 +20,12 @@ BOOT_LOG_MODULE_REGISTER(myFat);
 #define FIRMWARE_IMAGE_FILENAME "fw.bin"
 #define MKFS_TRIGGER_FILENAME "mkfs.now"
 
+#define EMD_LZ4_MAGIC "PRL4"
+#define EMD_LZ4_HEADER_SIZE 16U
+#define EMD_LZ4_MAX_CHUNK_SIZE (4U * 1024U)
+#define EMD_LZ4_COMPRESSBOUND(size) ((size) + ((size) / 255U) + 16U)
+#define EMD_LZ4_MAX_COMPRESSED_CHUNK_SIZE EMD_LZ4_COMPRESSBOUND(EMD_LZ4_MAX_CHUNK_SIZE)
+
 static BYTE work[FF_MAX_SS];
 
 static FATFS fat_fs;
@@ -32,6 +39,8 @@ static struct fs_mount_t mnt = {
 char full_filename[FILENAME_PATH_SIZE];
 static uint8_t firmware_buf[CONFIG_IMG_BLOCK_BUF_SIZE];
 static uint8_t flash_buf[CONFIG_IMG_BLOCK_BUF_SIZE];
+static uint8_t lz4_compressed_buf[EMD_LZ4_MAX_COMPRESSED_CHUNK_SIZE];
+static uint8_t lz4_decompressed_buf[EMD_LZ4_MAX_CHUNK_SIZE];
 
 static bool fat_file_read_error_detected;
 
@@ -195,6 +204,553 @@ static void log_progress_line(unsigned int written, unsigned int total)
 static size_t myFat_min_size(size_t lhs, size_t rhs)
 {
     return (lhs < rhs) ? lhs : rhs;
+}
+
+static int myFat_readExact(struct fs_file_t *file, void *buffer, size_t size)
+{
+    uint8_t *dst = buffer;
+    size_t total = 0U;
+
+    while (total < size)
+    {
+        int read_len = fs_read(file, dst + total, size - total);
+        if (read_len < 0)
+        {
+            myFat_noteFileReadError();
+            return read_len;
+        }
+        if (read_len == 0)
+        {
+            myFat_noteFileReadError();
+            return -EIO;
+        }
+
+        total += (size_t)read_len;
+    }
+
+    return 0;
+}
+
+static int myFat_lz4DecompressBlock(const uint8_t *src,
+                                    size_t src_size,
+                                    uint8_t *dst,
+                                    size_t dst_capacity)
+{
+    size_t ip = 0U;
+    size_t op = 0U;
+
+    while (ip < src_size)
+    {
+        uint8_t token = src[ip++];
+        size_t literal_len = token >> 4;
+        size_t match_len = token & 0x0FU;
+        uint16_t offset;
+        size_t match_pos;
+
+        if (literal_len == 15U)
+        {
+            uint8_t value;
+            do
+            {
+                if (ip >= src_size)
+                {
+                    return -EINVAL;
+                }
+                value = src[ip++];
+                literal_len += value;
+            } while (value == 255U);
+        }
+
+        if ((literal_len > (src_size - ip)) || (literal_len > (dst_capacity - op)))
+        {
+            return -EINVAL;
+        }
+
+        memcpy(&dst[op], &src[ip], literal_len);
+        ip += literal_len;
+        op += literal_len;
+
+        if (ip == src_size)
+        {
+            return (int)op;
+        }
+
+        if ((src_size - ip) < 2U)
+        {
+            return -EINVAL;
+        }
+
+        offset = (uint16_t)src[ip] | ((uint16_t)src[ip + 1U] << 8);
+        ip += 2U;
+        if ((offset == 0U) || (offset > op))
+        {
+            return -EINVAL;
+        }
+
+        if (match_len == 15U)
+        {
+            uint8_t value;
+            do
+            {
+                if (ip >= src_size)
+                {
+                    return -EINVAL;
+                }
+                value = src[ip++];
+                match_len += value;
+            } while (value == 255U);
+        }
+        match_len += 4U;
+
+        if (match_len > (dst_capacity - op))
+        {
+            return -EINVAL;
+        }
+
+        match_pos = op - offset;
+        for (size_t i = 0; i < match_len; i++)
+        {
+            dst[op++] = dst[match_pos + i];
+        }
+    }
+
+    return (int)op;
+}
+
+static int myFat_validateInstalledHeader(const struct flash_area *fa, size_t image_size)
+{
+    struct image_header image_hdr;
+    int rc;
+
+    if (image_size < sizeof(image_hdr))
+    {
+        BOOT_LOG_ERR("Invalid image: image size < image header!");
+        return -EINVAL;
+    }
+
+    rc = flash_area_read(fa, 0, &image_hdr, sizeof(image_hdr));
+    if (rc != 0)
+    {
+        BOOT_LOG_ERR("Failed to read installed image header (%d)", rc);
+        return rc;
+    }
+
+    if (image_hdr.ih_magic != IMAGE_MAGIC)
+    {
+        BOOT_LOG_ERR("Invalid image magic: 0x%08x", image_hdr.ih_magic);
+        return -EINVAL;
+    }
+
+    if (((size_t)image_hdr.ih_hdr_size + image_hdr.ih_img_size) > image_size)
+    {
+        BOOT_LOG_ERR("Invalid image size in header: hdr=%u img=%u file=%u",
+                     image_hdr.ih_hdr_size,
+                     image_hdr.ih_img_size,
+                     (unsigned int)image_size);
+        return -EINVAL;
+    }
+
+    return 0;
+}
+
+static int myFat_writeAligned(const struct flash_area *fa,
+                              off_t offset,
+                              const uint8_t *buffer,
+                              size_t size,
+                              uint8_t erased_val)
+{
+    uint32_t align = flash_area_align(fa);
+    size_t written = 0U;
+
+    if (align == 0U)
+    {
+        align = 1U;
+    }
+
+    if ((offset < 0) || ((size_t)offset > fa->fa_size) || (size > (fa->fa_size - (size_t)offset)))
+    {
+        BOOT_LOG_ERR("Refusing flash write outside slot: off=%u size=%u slot=%u",
+                     (unsigned int)offset,
+                     (unsigned int)size,
+                     (unsigned int)fa->fa_size);
+        return -EINVAL;
+    }
+
+    if ((sizeof(firmware_buf) % align) != 0U)
+    {
+        BOOT_LOG_ERR("Firmware scratch buffer is not aligned to flash write size");
+        return -EINVAL;
+    }
+
+    while (written < size)
+    {
+        size_t payload_size = myFat_min_size(sizeof(firmware_buf), size - written);
+        size_t write_size = payload_size;
+        int rc;
+
+        if ((write_size % align) != 0U)
+        {
+            write_size += align - (write_size % align);
+        }
+
+        if (write_size > sizeof(firmware_buf))
+        {
+            return -EINVAL;
+        }
+
+        memset(firmware_buf, erased_val, write_size);
+        memcpy(firmware_buf, buffer + written, payload_size);
+
+        rc = flash_area_write(fa, offset + (off_t)written, firmware_buf, write_size);
+        if (rc != 0)
+        {
+            return rc;
+        }
+
+        MCUBOOT_WATCHDOG_FEED();
+        written += payload_size;
+    }
+
+    return 0;
+}
+
+static int myFat_flashMatchesAligned(const struct flash_area *fa,
+                                     off_t offset,
+                                     const uint8_t *buffer,
+                                     size_t size,
+                                     uint8_t erased_val,
+                                     bool *matches)
+{
+    uint32_t align = flash_area_align(fa);
+    size_t checked = 0U;
+
+    if (matches == NULL)
+    {
+        return -EINVAL;
+    }
+
+    *matches = false;
+
+    if (align == 0U)
+    {
+        align = 1U;
+    }
+
+    if ((offset < 0) || ((size_t)offset > fa->fa_size) || (size > (fa->fa_size - (size_t)offset)))
+    {
+        BOOT_LOG_ERR("Refusing flash compare outside slot: off=%u size=%u slot=%u",
+                     (unsigned int)offset,
+                     (unsigned int)size,
+                     (unsigned int)fa->fa_size);
+        return -EINVAL;
+    }
+
+    if ((sizeof(firmware_buf) % align) != 0U)
+    {
+        BOOT_LOG_ERR("Firmware scratch buffer is not aligned to flash write size");
+        return -EINVAL;
+    }
+
+    while (checked < size)
+    {
+        size_t payload_size = myFat_min_size(sizeof(firmware_buf), size - checked);
+        size_t compare_size = payload_size;
+        int rc;
+
+        if ((compare_size % align) != 0U)
+        {
+            compare_size += align - (compare_size % align);
+        }
+
+        if (compare_size > sizeof(firmware_buf))
+        {
+            return -EINVAL;
+        }
+
+        if (((size_t)offset + checked + compare_size) > fa->fa_size)
+        {
+            BOOT_LOG_ERR("Refusing aligned flash compare outside slot");
+            return -EINVAL;
+        }
+
+        memset(firmware_buf, erased_val, compare_size);
+        memcpy(firmware_buf, buffer + checked, payload_size);
+
+        rc = flash_area_read(fa, offset + (off_t)checked, flash_buf, compare_size);
+        if (rc != 0)
+        {
+            return rc;
+        }
+
+        if (memcmp(firmware_buf, flash_buf, compare_size) != 0)
+        {
+            return 0;
+        }
+
+        MCUBOOT_WATCHDOG_FEED();
+        checked += payload_size;
+    }
+
+    *matches = true;
+    return 0;
+}
+
+static int myFat_ensureErasedForWrite(const struct flash_area *fa,
+                                      off_t offset,
+                                      size_t size,
+                                      size_t *erased_until)
+{
+    uint32_t align = flash_area_align(fa);
+    size_t erase_needed_until;
+
+    if (!flash_area_erase_required(fa))
+    {
+        return 0;
+    }
+
+    if ((erased_until == NULL) || (offset < 0))
+    {
+        return -EINVAL;
+    }
+
+    if (align == 0U)
+    {
+        align = 1U;
+    }
+
+    if (((size_t)offset > fa->fa_size) || (size > (fa->fa_size - (size_t)offset)))
+    {
+        BOOT_LOG_ERR("Refusing erase outside slot: off=%u size=%u slot=%u",
+                     (unsigned int)offset,
+                     (unsigned int)size,
+                     (unsigned int)fa->fa_size);
+        return -EINVAL;
+    }
+
+    erase_needed_until = (size_t)offset + size;
+    if ((erase_needed_until % align) != 0U)
+    {
+        erase_needed_until += align - (erase_needed_until % align);
+    }
+
+    if (erase_needed_until > fa->fa_size)
+    {
+        BOOT_LOG_ERR("Refusing aligned erase outside slot: end=%u slot=%u",
+                     (unsigned int)erase_needed_until,
+                     (unsigned int)fa->fa_size);
+        return -EINVAL;
+    }
+
+    while (*erased_until < erase_needed_until)
+    {
+        struct flash_sector sector;
+        int rc;
+
+        rc = flash_area_get_sector(fa, (off_t)*erased_until, &sector);
+        if (rc != 0)
+        {
+            BOOT_LOG_ERR("Failed to get erase sector at offset %u (%d)",
+                         (unsigned int)*erased_until,
+                         rc);
+            return rc;
+        }
+
+        rc = flash_area_erase(fa, sector.fs_off, sector.fs_size);
+        if (rc != 0)
+        {
+            BOOT_LOG_ERR("Failed to erase sector at offset %u size %u (%d)",
+                         (unsigned int)sector.fs_off,
+                         (unsigned int)sector.fs_size,
+                         rc);
+            return rc;
+        }
+
+        *erased_until = (size_t)sector.fs_off + sector.fs_size;
+        myFoilLeds_setState(LED_FOIL_TOGGLE_BOTH);
+        MCUBOOT_WATCHDOG_FEED();
+    }
+
+    return 0;
+}
+
+static int myFat_installLz4Package(struct fs_file_t *file,
+                                   const struct fs_dirent *entry,
+                                   const struct flash_area *upload_area,
+                                   uint8_t erased_val,
+                                   const uint8_t header[EMD_LZ4_HEADER_SIZE])
+{
+    uint32_t original_size = sys_get_le32(&header[4]);
+    uint32_t chunk_size = sys_get_le32(&header[8]);
+    uint32_t chunk_count = sys_get_le32(&header[12]);
+    uint32_t expected_chunks;
+    size_t file_offset = EMD_LZ4_HEADER_SIZE;
+    size_t written = 0U;
+    size_t programmed = 0U;
+    size_t skipped = 0U;
+    size_t erased_until = 0U;
+    int rc;
+
+    if (original_size > upload_area->fa_size)
+    {
+        BOOT_LOG_ERR("Decompressed image too large: %u > slot size %u",
+                     original_size,
+                     (unsigned int)upload_area->fa_size);
+        return -EINVAL;
+    }
+
+    if ((chunk_size == 0U) || (chunk_size > EMD_LZ4_MAX_CHUNK_SIZE))
+    {
+        BOOT_LOG_ERR("Unsupported LZ4 chunk size: %u", chunk_size);
+        return -EINVAL;
+    }
+
+    expected_chunks = (original_size + chunk_size - 1U) / chunk_size;
+    if ((chunk_count == 0U) || (chunk_count != expected_chunks))
+    {
+        BOOT_LOG_ERR("Invalid LZ4 chunk count: %u expected %u", chunk_count, expected_chunks);
+        return -EINVAL;
+    }
+
+    BOOT_LOG_WRN("LZ4 firmware package detected: %u bytes, %u chunks x %u bytes",
+                 original_size,
+                 chunk_count,
+                 chunk_size);
+
+    BOOT_LOG_INF("Erasing inactive slot as LZ4 chunks are written");
+
+    rc = fs_seek(file, EMD_LZ4_HEADER_SIZE, FS_SEEK_SET);
+    if (rc < 0)
+    {
+        myFat_noteFileReadError();
+        return rc;
+    }
+
+    for (uint32_t chunk_index = 0; chunk_index < chunk_count; chunk_index++)
+    {
+        uint8_t size_buf[4];
+        uint32_t compressed_size;
+        uint32_t expected_size;
+        bool matches;
+        int decoded_size;
+
+        rc = myFat_readExact(file, size_buf, sizeof(size_buf));
+        if (rc != 0)
+        {
+            return rc;
+        }
+        file_offset += sizeof(size_buf);
+
+        compressed_size = sys_get_le32(size_buf);
+        if ((compressed_size == 0U) || (compressed_size > EMD_LZ4_MAX_COMPRESSED_CHUNK_SIZE))
+        {
+            BOOT_LOG_ERR("Invalid compressed chunk %u size: %u", chunk_index, compressed_size);
+            return -EINVAL;
+        }
+
+        if ((file_offset + compressed_size) > (size_t)entry->size)
+        {
+            BOOT_LOG_ERR("Compressed chunk %u exceeds package size", chunk_index);
+            return -EINVAL;
+        }
+
+        rc = myFat_readExact(file, lz4_compressed_buf, compressed_size);
+        if (rc != 0)
+        {
+            return rc;
+        }
+        file_offset += compressed_size;
+
+        expected_size = myFat_min_size(chunk_size, original_size - written);
+        if (expected_size > (upload_area->fa_size - written))
+        {
+            BOOT_LOG_ERR("Refusing decompressed chunk outside slot: written=%u chunk=%u slot=%u",
+                         (unsigned int)written,
+                         expected_size,
+                         (unsigned int)upload_area->fa_size);
+            return -EINVAL;
+        }
+
+        decoded_size = myFat_lz4DecompressBlock(lz4_compressed_buf,
+                                                compressed_size,
+                                                lz4_decompressed_buf,
+                                                expected_size);
+        if (decoded_size != (int)expected_size)
+        {
+            BOOT_LOG_ERR("Failed to decompress chunk %u (%d, expected %u)",
+                         chunk_index,
+                         decoded_size,
+                         expected_size);
+            return -EINVAL;
+        }
+
+        rc = myFat_flashMatchesAligned(upload_area,
+                                       (off_t)written,
+                                       lz4_decompressed_buf,
+                                       expected_size,
+                                       erased_val,
+                                       &matches);
+        if (rc != 0)
+        {
+            BOOT_LOG_ERR("Failed to compare decompressed chunk %u at offset %u (%d)",
+                         chunk_index,
+                         (unsigned int)written,
+                         rc);
+            return rc;
+        }
+
+        if (matches)
+        {
+            skipped += expected_size;
+            written += expected_size;
+            log_progress_line((unsigned int)written, original_size);
+            myFoilLeds_setState(LED_FOIL_TOGGLE_BOTH);
+            MCUBOOT_WATCHDOG_FEED();
+            continue;
+        }
+
+        rc = myFat_ensureErasedForWrite(upload_area,
+                                        (off_t)written,
+                                        expected_size,
+                                        &erased_until);
+        if (rc != 0)
+        {
+            return rc;
+        }
+
+        rc = myFat_writeAligned(upload_area,
+                                (off_t)written,
+                                lz4_decompressed_buf,
+                                expected_size,
+                                erased_val);
+        if (rc != 0)
+        {
+            BOOT_LOG_ERR("Failed to write decompressed chunk %u at offset %u (%d)",
+                         chunk_index,
+                         (unsigned int)written,
+                         rc);
+            return rc;
+        }
+
+        programmed += expected_size;
+        written += expected_size;
+        log_progress_line((unsigned int)written, original_size);
+        myFoilLeds_setState(LED_FOIL_TOGGLE_BOTH);
+        MCUBOOT_WATCHDOG_FEED();
+    }
+    printk("\n");
+
+    if (file_offset != (size_t)entry->size)
+    {
+        BOOT_LOG_ERR("Unexpected trailing data in LZ4 package: %u bytes",
+                     (unsigned int)((size_t)entry->size - file_offset));
+        return -EINVAL;
+    }
+
+    BOOT_LOG_INF("Decompressed %u bytes from LZ4 package, wrote %u bytes, skipped %u bytes",
+                 (unsigned int)written,
+                 (unsigned int)programmed,
+                 (unsigned int)skipped);
+    return myFat_validateInstalledHeader(upload_area, original_size);
 }
 
 static int myFat_prepareChunk(struct fs_file_t *file,
@@ -364,6 +920,8 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
     int rc;
     struct fs_dirent entry;
     const struct flash_area *upload_area = NULL;
+    uint8_t file_header[EMD_LZ4_HEADER_SIZE];
+    bool lz4_package = false;
     uint8_t erased_val;
     size_t processed = 0U;
     size_t written = 0U;
@@ -410,16 +968,6 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
     {
         char size_buf[16];
 
-        if (entry.size > upload_area->fa_size)
-        {
-            BOOT_LOG_ERR("Firmware image too large: %u > slot size %u",
-                         (unsigned int)entry.size,
-                         (unsigned int)upload_area->fa_size);
-            flash_area_close(upload_area);
-            fs_unmount(&mnt);
-            return -1;
-        }
-
         fmt_kb_mb(size_buf, sizeof(size_buf), entry.size);
         BOOT_LOG_WRN("New firmware image file \"%s\" found! (%s)", FIRMWARE_IMAGE_FILENAME, size_buf);
         rc = fs_open(&fs_file_image, full_filename, FS_O_READ);
@@ -430,12 +978,79 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
             fs_unmount(&mnt);
             return -1;
         }
+
+        if (entry.size >= EMD_LZ4_HEADER_SIZE)
+        {
+            rc = myFat_readExact(&fs_file_image, file_header, sizeof(file_header));
+            if (rc != 0)
+            {
+                BOOT_LOG_ERR("Failed to read firmware package header (%d)", rc);
+                fs_close(&fs_file_image);
+                flash_area_close(upload_area);
+                fs_unmount(&mnt);
+                return -1;
+            }
+
+            lz4_package = (memcmp(file_header, EMD_LZ4_MAGIC, strlen(EMD_LZ4_MAGIC)) == 0);
+            rc = fs_seek(&fs_file_image, 0, FS_SEEK_SET);
+            if (rc < 0)
+            {
+                BOOT_LOG_ERR("Failed to rewind firmware file (%d)", rc);
+                fs_close(&fs_file_image);
+                flash_area_close(upload_area);
+                fs_unmount(&mnt);
+                return -1;
+            }
+        }
+
+        if (!lz4_package && (entry.size > upload_area->fa_size))
+        {
+            BOOT_LOG_ERR("Firmware image too large: %u > slot size %u",
+                         (unsigned int)entry.size,
+                         (unsigned int)upload_area->fa_size);
+            fs_close(&fs_file_image);
+            flash_area_close(upload_area);
+            fs_unmount(&mnt);
+            return -1;
+        }
     }
     else
     {
         flash_area_close(upload_area);
         fs_unmount(&mnt);
         return -1;
+    }
+
+    if (lz4_package)
+    {
+        rc = myFat_installLz4Package(&fs_file_image, &entry, upload_area, erased_val, file_header);
+        myFoilLeds_setState(LED_FOIL_OFF);
+        fs_close(&fs_file_image);
+
+        if ((rc != 0) || fat_file_read_error_detected)
+        {
+            if (fat_file_read_error_detected)
+            {
+                (void)myFat_formatAfterFileReadError();
+            }
+            flash_area_close(upload_area);
+            fs_unmount(&mnt);
+            return -1;
+        }
+
+        rc = fs_unlink(full_filename);
+        if (rc < 0)
+        {
+            BOOT_LOG_ERR("Failed to remove firmware upgrade file \"%s\"", full_filename);
+        }
+        else
+        {
+            BOOT_LOG_INF("Removed firmware upgrade file \"%s\" after installation", full_filename);
+        }
+
+        fs_unmount(&mnt);
+        flash_area_close(upload_area);
+        return 0;
     }
 
     while (processed < entry.size)
@@ -523,6 +1138,14 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
         return -1;
     }
 
+    rc = myFat_validateInstalledHeader(upload_area, entry.size);
+    if (rc != 0)
+    {
+        fs_unmount(&mnt);
+        flash_area_close(upload_area);
+        return -1;
+    }
+
     rc = fs_unlink(full_filename);
     if (rc < 0)
     {
@@ -535,12 +1158,6 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
 
     fs_unmount(&mnt);
     flash_area_close(upload_area);
-
-    if (entry.size < sizeof(struct image_header))
-    {
-        BOOT_LOG_ERR("Invalid image: image size < image header!");
-        return -1;
-    }
 
     return 0;
 
