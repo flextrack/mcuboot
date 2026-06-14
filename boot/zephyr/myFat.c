@@ -18,6 +18,7 @@ BOOT_LOG_MODULE_REGISTER(myFat);
 #define DISK_ACCESS_NAME "NOR"
 
 #define FIRMWARE_IMAGE_FILENAME "fw.bin"
+#define FIRMWARE_FAIL_FILENAME "fw.fail"
 #define MKFS_TRIGGER_FILENAME "mkfs.now"
 
 #define EMD_LZ4_MAGIC "PRL4"
@@ -132,6 +133,49 @@ static int myFat_formatAfterFileReadError(void)
     }
 
     return rc;
+}
+
+static void myFat_markFirmwareInstallFailed(void)
+{
+    struct fs_file_t fail_file;
+    char firmware_filename[FILENAME_PATH_SIZE];
+    char fail_filename[FILENAME_PATH_SIZE];
+    int rc;
+
+    snprintf(firmware_filename, sizeof(firmware_filename), "%s/%s", mnt.mnt_point, FIRMWARE_IMAGE_FILENAME);
+    snprintf(fail_filename, sizeof(fail_filename), "%s/%s", mnt.mnt_point, FIRMWARE_FAIL_FILENAME);
+
+    rc = fs_unlink(firmware_filename);
+    if (rc < 0)
+    {
+        BOOT_LOG_ERR("Failed to remove failed firmware file \"%s\" (%d)", firmware_filename, rc);
+    }
+    else
+    {
+        BOOT_LOG_WRN("Removed failed firmware file \"%s\"", firmware_filename);
+    }
+
+    (void)fs_unlink(fail_filename);
+
+    fs_file_t_init(&fail_file);
+    rc = fs_open(&fail_file, fail_filename, FS_O_CREATE | FS_O_WRITE);
+    if (rc < 0)
+    {
+        BOOT_LOG_ERR("Failed to create firmware failure marker \"%s\" (%d)", fail_filename, rc);
+        return;
+    }
+
+    (void)fs_close(&fail_file);
+    (void)myFat_syncDiskCache();
+    BOOT_LOG_WRN("Created firmware failure marker \"%s\"", fail_filename);
+}
+
+static void myFat_removeFirmwareFailMarker(void)
+{
+    char fail_filename[FILENAME_PATH_SIZE];
+
+    snprintf(fail_filename, sizeof(fail_filename), "%s/%s", mnt.mnt_point, FIRMWARE_FAIL_FILENAME);
+    (void)fs_unlink(fail_filename);
 }
 
 static inline void fmt_bytes(char *out, size_t out_sz, uint32_t bytes)
@@ -877,6 +921,14 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
             {
                 BOOT_LOG_ERR("Failed to read firmware package header (%d)", rc);
                 fs_close(&fs_file_image);
+                if (fat_file_read_error_detected)
+                {
+                    (void)myFat_formatAfterFileReadError();
+                }
+                else
+                {
+                    myFat_markFirmwareInstallFailed();
+                }
                 flash_area_close(upload_area);
                 fs_unmount(&mnt);
                 return -1;
@@ -888,6 +940,7 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
             {
                 BOOT_LOG_ERR("Failed to rewind firmware file (%d)", rc);
                 fs_close(&fs_file_image);
+                myFat_markFirmwareInstallFailed();
                 flash_area_close(upload_area);
                 fs_unmount(&mnt);
                 return -1;
@@ -900,6 +953,7 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
                          (unsigned int)entry.size,
                          (unsigned int)upload_area->fa_size);
             fs_close(&fs_file_image);
+            myFat_markFirmwareInstallFailed();
             flash_area_close(upload_area);
             fs_unmount(&mnt);
             return -1;
@@ -924,6 +978,10 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
             {
                 (void)myFat_formatAfterFileReadError();
             }
+            else
+            {
+                myFat_markFirmwareInstallFailed();
+            }
             flash_area_close(upload_area);
             fs_unmount(&mnt);
             return -1;
@@ -938,6 +996,7 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
         {
             BOOT_LOG_INF("Removed firmware upgrade file \"%s\" after installation", full_filename);
         }
+        myFat_removeFirmwareFailMarker();
 
         fs_unmount(&mnt);
         flash_area_close(upload_area);
@@ -1017,6 +1076,14 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
 
     if (processed < entry.size)
     {
+        if (fat_file_read_error_detected)
+        {
+            (void)myFat_formatAfterFileReadError();
+        }
+        else
+        {
+            myFat_markFirmwareInstallFailed();
+        }
         fs_unmount(&mnt);
         flash_area_close(upload_area);
         return -1;
@@ -1032,6 +1099,7 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
     rc = myFat_validateInstalledHeader(upload_area, entry.size);
     if (rc != 0)
     {
+        myFat_markFirmwareInstallFailed();
         fs_unmount(&mnt);
         flash_area_close(upload_area);
         return -1;
@@ -1046,6 +1114,7 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
     {
         BOOT_LOG_INF("Removed firmware upgrade file \"%s\" after installation", full_filename);
     }
+    myFat_removeFirmwareFailMarker();
 
     fs_unmount(&mnt);
     flash_area_close(upload_area);
