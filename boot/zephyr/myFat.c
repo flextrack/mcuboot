@@ -18,7 +18,7 @@ BOOT_LOG_MODULE_REGISTER(myFat);
 #define DISK_ACCESS_NAME "NOR"
 
 #define FIRMWARE_IMAGE_FILENAME "fw.bin"
-#define FIRMWARE_FAIL_FILENAME "fw.fail"
+#define FIRMWARE_FAIL_FILENAME "fw.err"
 #define MKFS_TRIGGER_FILENAME "mkfs.now"
 
 #define EMD_LZ4_MAGIC "PRL4"
@@ -136,6 +136,16 @@ static int myFat_formatAfterFileReadError(void)
     return rc;
 }
 
+static void myFat_unlinkIfExists(const char *path)
+{
+    struct fs_dirent entry;
+
+    if (fs_stat(path, &entry) == 0)
+    {
+        (void)fs_unlink(path);
+    }
+}
+
 static void myFat_markFirmwareInstallFailed(const char *reason, int error_code)
 {
     struct fs_file_t fail_file;
@@ -157,10 +167,10 @@ static void myFat_markFirmwareInstallFailed(const char *reason, int error_code)
         BOOT_LOG_WRN("Removed failed firmware file \"%s\"", firmware_filename);
     }
 
-    (void)fs_unlink(fail_filename);
+    myFat_unlinkIfExists(fail_filename);
 
     fs_file_t_init(&fail_file);
-    rc = fs_open(&fail_file, fail_filename, FS_O_CREATE | FS_O_WRITE);
+    rc = fs_open(&fail_file, fail_filename, FS_O_CREATE | FS_O_TRUNC | FS_O_WRITE);
     if (rc < 0)
     {
         BOOT_LOG_ERR("Failed to create firmware failure marker \"%s\" (%d)", fail_filename, rc);
@@ -195,7 +205,7 @@ static void myFat_removeFirmwareFailMarker(void)
     char fail_filename[FILENAME_PATH_SIZE];
 
     snprintf(fail_filename, sizeof(fail_filename), "%s/%s", mnt.mnt_point, FIRMWARE_FAIL_FILENAME);
-    (void)fs_unlink(fail_filename);
+    myFat_unlinkIfExists(fail_filename);
 }
 
 static inline void fmt_bytes(char *out, size_t out_sz, uint32_t bytes)
@@ -263,6 +273,46 @@ static void log_progress_line(unsigned int written, unsigned int total)
     (void)snprintf(line, sizeof(line), "Flashing [%s] %3d%%  %s / %s", bar, percent, wbuf, tbuf);
 
     printk("\r%s", line);
+}
+
+static void log_lz4_progress_line(unsigned int chunks_done,
+                                  unsigned int chunks_total,
+                                  unsigned int stored_bytes)
+{
+    char line[112];
+    char bar[21];
+    char wbuf[16];
+
+    int percent = chunks_total ? (int)((chunks_done * 100U) / chunks_total) : 0;
+    int bars = percent / 5;
+
+    for (int i = 0; i < 20; i++)
+    {
+        bar[i] = (i < bars) ? '#' : ' ';
+    }
+    bar[20] = '\0';
+
+    fmt_kb_mb(wbuf, sizeof(wbuf), stored_bytes);
+
+    (void)snprintf(line,
+                   sizeof(line),
+                   "Flashing [%s] %3d%%  chunk %u/%u  %s written",
+                   bar,
+                   percent,
+                   chunks_done,
+                   chunks_total,
+                   wbuf);
+
+    printk("\r%s", line);
+}
+
+static void finish_progress_line(bool *progress_printed)
+{
+    if (*progress_printed)
+    {
+        printk("\n");
+        *progress_printed = false;
+    }
 }
 
 static size_t myFat_min_size(size_t lhs, size_t rhs)
@@ -570,6 +620,7 @@ static int myFat_installLz4Package(struct fs_file_t *file,
     size_t written = 0U;
     size_t programmed = 0U;
     size_t erased_until = 0U;
+    bool progress_printed = false;
     int rc;
 
     if (original_size > upload_area->fa_size)
@@ -621,6 +672,7 @@ static int myFat_installLz4Package(struct fs_file_t *file,
         rc = myFat_readExact(file, size_buf, sizeof(size_buf));
         if (rc != 0)
         {
+            finish_progress_line(&progress_printed);
             firmware_install_fail_reason = "lz4 chunk size read failed";
             return rc;
         }
@@ -629,6 +681,7 @@ static int myFat_installLz4Package(struct fs_file_t *file,
         compressed_size = sys_get_le32(size_buf);
         if ((compressed_size == 0U) || (compressed_size > EMD_LZ4_MAX_COMPRESSED_CHUNK_SIZE))
         {
+            finish_progress_line(&progress_printed);
             BOOT_LOG_ERR("Invalid compressed chunk %u size: %u", chunk_index, compressed_size);
             firmware_install_fail_reason = "lz4 invalid compressed chunk size";
             return -EINVAL;
@@ -636,6 +689,7 @@ static int myFat_installLz4Package(struct fs_file_t *file,
 
         if ((file_offset + compressed_size) > (size_t)entry->size)
         {
+            finish_progress_line(&progress_printed);
             BOOT_LOG_ERR("Compressed chunk %u exceeds package size", chunk_index);
             firmware_install_fail_reason = "lz4 compressed chunk exceeds package size";
             return -EINVAL;
@@ -644,6 +698,7 @@ static int myFat_installLz4Package(struct fs_file_t *file,
         rc = myFat_readExact(file, lz4_compressed_buf, compressed_size);
         if (rc != 0)
         {
+            finish_progress_line(&progress_printed);
             firmware_install_fail_reason = "lz4 compressed chunk read failed";
             return rc;
         }
@@ -652,6 +707,7 @@ static int myFat_installLz4Package(struct fs_file_t *file,
         expected_size = myFat_min_size(chunk_size, original_size - written);
         if (expected_size > (upload_area->fa_size - written))
         {
+            finish_progress_line(&progress_printed);
             BOOT_LOG_ERR("Refusing decompressed chunk outside slot: written=%u chunk=%u slot=%u",
                          (unsigned int)written,
                          expected_size,
@@ -666,6 +722,7 @@ static int myFat_installLz4Package(struct fs_file_t *file,
                                                 expected_size);
         if (decoded_size != (int)expected_size)
         {
+            finish_progress_line(&progress_printed);
             BOOT_LOG_ERR("Failed to decompress chunk %u (%d, expected %u)",
                          chunk_index,
                          decoded_size,
@@ -680,6 +737,7 @@ static int myFat_installLz4Package(struct fs_file_t *file,
                                         &erased_until);
         if (rc != 0)
         {
+            finish_progress_line(&progress_printed);
             firmware_install_fail_reason = "lz4 flash erase failed";
             return rc;
         }
@@ -691,6 +749,7 @@ static int myFat_installLz4Package(struct fs_file_t *file,
                                 erased_val);
         if (rc != 0)
         {
+            finish_progress_line(&progress_printed);
             BOOT_LOG_ERR("Failed to write decompressed chunk %u at offset %u (%d)",
                          chunk_index,
                          (unsigned int)written,
@@ -701,14 +760,18 @@ static int myFat_installLz4Package(struct fs_file_t *file,
 
         programmed += expected_size;
         written += expected_size;
-        log_progress_line((unsigned int)written, original_size);
+        log_lz4_progress_line(chunk_index + 1U,
+                              chunk_count,
+                              (unsigned int)written);
+        progress_printed = true;
         myFoilLeds_setState(LED_FOIL_TOGGLE_BOTH);
         MCUBOOT_WATCHDOG_FEED();
     }
-    printk("\n");
+    finish_progress_line(&progress_printed);
 
     if (file_offset != (size_t)entry->size)
     {
+        finish_progress_line(&progress_printed);
         BOOT_LOG_ERR("Unexpected trailing data in LZ4 package: %u bytes",
                      (unsigned int)((size_t)entry->size - file_offset));
         firmware_install_fail_reason = "lz4 package has trailing data";
@@ -903,6 +966,7 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
     unsigned int compared_sectors = 0U;
     unsigned int written_sectors = 0U;
     unsigned int skipped_sectors = 0U;
+    bool progress_printed = false;
     const char *fail_reason = "unknown";
     int fail_rc = 0;
 
@@ -1022,9 +1086,7 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
             }
             else
             {
-                myFat_markFirmwareInstallFailed((firmware_install_fail_reason != NULL) ?
-                                                    firmware_install_fail_reason :
-                                                    "lz4 package install failed",
+                myFat_markFirmwareInstallFailed((firmware_install_fail_reason != NULL) ? firmware_install_fail_reason : "lz4 package install failed",
                                                 rc);
             }
             flash_area_close(upload_area);
@@ -1057,6 +1119,7 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
         rc = flash_area_get_sector(upload_area, (off_t)processed, &sector);
         if (rc != 0)
         {
+            finish_progress_line(&progress_printed);
             BOOT_LOG_ERR("Failed to get flash sector at offset %u rc=%d", (unsigned int)processed, rc);
             fail_reason = "raw flash sector lookup failed";
             fail_rc = rc;
@@ -1066,6 +1129,7 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
         rc = myFat_sectorMatchesImage(&fs_file_image, upload_area, &sector, entry.size, erased_val, &matches);
         if (rc != 0)
         {
+            finish_progress_line(&progress_printed);
             BOOT_LOG_ERR("Failed to compare sector at offset %u rc=%d", (unsigned int)sector.fs_off, rc);
             if (fat_file_read_error_detected)
             {
@@ -1084,6 +1148,7 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
             rc = myFat_programSector(&fs_file_image, upload_area, &sector, entry.size, erased_val, &written);
             if (rc != 0)
             {
+                finish_progress_line(&progress_printed);
                 BOOT_LOG_ERR("Failed to write changed sector at offset %u rc=%d",
                              (unsigned int)sector.fs_off,
                              rc);
@@ -1108,10 +1173,11 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
 
         processed = myFat_min_size((size_t)sector.fs_off + sector.fs_size, entry.size);
         log_progress_line((unsigned int)processed, entry.size);
+        progress_printed = true;
         myFoilLeds_setState(LED_FOIL_TOGGLE_BOTH);
         MCUBOOT_WATCHDOG_FEED();
     }
-    printk("\n");
+    finish_progress_line(&progress_printed);
 
     myFoilLeds_setState(LED_FOIL_OFF);
     BOOT_LOG_INF("Compared %u bytes, written %u bytes, skipped %u bytes",
@@ -1173,7 +1239,7 @@ int myFat_installFirmwareFromFatFile(uint8_t upload_slot)
     return 0;
 
 file_read_error:
-    printk("\n");
+    finish_progress_line(&progress_printed);
     myFoilLeds_setState(LED_FOIL_OFF);
     fs_close(&fs_file_image);
     (void)myFat_formatAfterFileReadError();
