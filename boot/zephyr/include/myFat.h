@@ -7,6 +7,7 @@ extern "C"
 #endif
 
     int myFat_installFirmwareFromFatFile(uint8_t upload_slot);
+    int myFat_markFirmwareRejected(const char *reason, int error_code);
     int myFat_setupUsbMscDisk(void);
 
 #ifdef __cplusplus
