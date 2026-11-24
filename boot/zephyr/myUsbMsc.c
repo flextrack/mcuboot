@@ -13,8 +13,8 @@ BOOT_LOG_MODULE_REGISTER(myUsbMsc);
 
 USBD_DEFINE_MSC_LUN(nor, "NOR", "Vestfrost", "EMD", "1.00");
 
-#define FLEXTRACK_USB_VID 0x2fe3
-#define FLEXTRACK_USBD_PID 0x0008
+#define FLEXTRACK_USB_VID 0x3A68
+#define FLEXTRACK_USBD_PID 0x0200
 
 #define USBD_MAX_POWER 200 // 200 * 2mA = 400mA
 
@@ -24,11 +24,7 @@ USBD_DEFINE_MSC_LUN(nor, "NOR", "Vestfrost", "EMD", "1.00");
 static bool usb_stack_initialized = false;
 
 /* doc device instantiation start */
-/*
- * Instantiate a context named sample_usbd using the default USB device
- * controller, the Zephyr project vendor ID, and the sample product ID.
- * Zephyr project vendor ID must not be used outside of Zephyr samples.
- */
+/* USB mass-storage device for the Parrot MCUboot FAT disk. */
 USBD_DEVICE_DEFINE(flex_usbd_context,
                    DEVICE_DT_GET(DT_NODELABEL(zephyr_usb)),
                    FLEXTRACK_USB_VID, FLEXTRACK_USBD_PID);
