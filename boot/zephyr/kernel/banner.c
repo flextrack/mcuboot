@@ -40,6 +40,11 @@ void boot_banner(void)
 	k_busy_wait(CONFIG_BOOT_DELAY * USEC_PER_MSEC);
 #endif /* defined(CONFIG_BOOT_DELAY) && (CONFIG_BOOT_DELAY > 0) */
 
+	printk(" ____   _    ____  ____   ___ _____\n"
+	       "|  _ \\ / \\  |  _ \\|  _ \\ / _ \\_   _|\n"
+	       "| |_) / _ \\ | |_) | |_) | | | || |\n"
+	       "|  __/ ___ \\|  _ <|  _ <| |_| || |\n"
+	       "|_| /_/   \\_\\_| \\_\\_| \\_\\\\___/ |_|\n");
 	printk("*** Booting MCUboot " APPLICATION_BANNER_VERSION " ***\n");
 	printk("*** " CONFIG_BOOT_BANNER_STRING " " BANNER_VERSION BANNER_POSTFIX " ***\n");
 }

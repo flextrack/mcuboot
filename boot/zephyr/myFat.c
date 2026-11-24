@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <string.h>
 
 #include <zephyr/fs/fs.h>
@@ -158,11 +159,11 @@ static void myFat_markFirmwareInstallFailed(const char *reason, int error_code)
     snprintf(fail_filename, sizeof(fail_filename), "%s/%s", mnt.mnt_point, FIRMWARE_FAIL_FILENAME);
 
     rc = fs_unlink(firmware_filename);
-    if (rc < 0)
+    if ((rc < 0) && (rc != -ENOENT))
     {
         BOOT_LOG_ERR("Failed to remove failed firmware file \"%s\" (%d)", firmware_filename, rc);
     }
-    else
+    else if (rc == 0)
     {
         BOOT_LOG_WRN("Removed failed firmware file \"%s\"", firmware_filename);
     }
@@ -198,6 +199,39 @@ static void myFat_markFirmwareInstallFailed(const char *reason, int error_code)
     (void)fs_close(&fail_file);
     (void)myFat_syncDiskCache();
     BOOT_LOG_WRN("Created firmware failure marker \"%s\"", fail_filename);
+}
+
+int myFat_markFirmwareRejected(const char *reason, int error_code)
+{
+    int rc;
+
+    if (reason == NULL)
+    {
+        return -EINVAL;
+    }
+
+    memset(&fat_fs, 0, sizeof(fat_fs));
+    rc = myFat_syncDiskCache();
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = fs_mount(&mnt);
+    if (rc != 0)
+    {
+        BOOT_LOG_ERR("Failed to mount FAT filesystem for firmware rejection marker (%d)", rc);
+        return rc;
+    }
+
+    myFat_markFirmwareInstallFailed(reason, error_code);
+    rc = fs_unmount(&mnt);
+    if (rc != 0)
+    {
+        BOOT_LOG_ERR("Failed to unmount FAT filesystem after firmware rejection marker (%d)", rc);
+    }
+
+    return rc;
 }
 
 static void myFat_removeFirmwareFailMarker(void)
